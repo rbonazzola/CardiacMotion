@@ -1,0 +1,49 @@
+root_folder: "/media/rodrigo/bd2fea02-a909-49bc-9c6c-e0750941ca71/data/meshes/vtk_meshes/2ch_full_cycle/"
+seed: null
+
+sample_sizes: {
+  training: 7,
+  validation: 3,
+  testing: 3,
+}
+
+network_architecture: {
+  latent_dim: 8,
+  n_features: 3,
+  convolution: { 
+    type:"Chebyshev",
+    parameters: {
+      channels: 16 32 64 128,      
+      polynomial_degree: 6 6 6 6,
+      activation_function: relu relu relu relu,
+    }
+  },
+  
+  pooling: {
+    type: "quadric",
+    parameters: {
+      template_mesh: "data/template.vtk",
+      downsampling_factors: 2 2 2 2,
+    }
+  }
+}
+
+loss: {
+  reconstruction_loss: {
+    type: "l2",
+    weight: 1
+  },
+  regularization_loss: {
+    type: "kullback_leibler_div",
+    weight: 1
+  }
+}
+
+optimizer: {
+  algorithm: "Adam",
+  parameters: {
+    lr: 0.001,
+    betas: [0.5, 0.99],
+    weight_decay: 0.0005
+  }
+}

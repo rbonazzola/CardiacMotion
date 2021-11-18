@@ -1,0 +1,3 @@
+[submodule "utils/VTKHelpers"]
+	path = utils/VTKHelpers
+	url = git@github.com:rbonazzola/VTKHelpers.git
