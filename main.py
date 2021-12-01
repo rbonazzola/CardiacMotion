@@ -1,5 +1,6 @@
 import sys
 import utils.VTKHelpers
+
 # sys.path.append("utils/VTKHelpers/")
 
 from CardiacMesh import Cardiac3DMesh, Cardiac4DMesh, CardiacMeshPopulation
@@ -23,22 +24,25 @@ import pickle as pkl
 from utils import mesh_operations
 from utils.helpers import *
 from models.model import Coma4D
+from models.coma_ml_module import CoMA
 
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
 
 from config.load_config import load_config
 
+from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
 
-optimizers_menu = {
-  "adam": torch.optim.Adam(coma.parameters(), lr=lr, betas=(0.5,0.99), weight_decay=weight_decay),
-  "sgd": torch.optim.SGD(coma.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
-}
+# optimizers_menu = {
+#   "adam": torch.optim.Adam(coma.parameters(), lr=lr, betas=(0.5,0.99), weight_decay=weight_decay),
+#   "sgd": torch.optim.SGD(coma.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
+# }
+#
+# losses_menu = {
+#   "l1": {"name": "L1", "function": F.l1_loss},
+#   "mse": {"name": "MSE", "function": F.mse_loss}
+# }
 
-losses_menu = {
-  "l1": {"name": "L1", "function": F.l1_loss},
-  "mse": {"name": "MSE", "function": F.mse_loss}
-}
 
 def print_auto_logged_info(r):
 
@@ -53,27 +57,37 @@ def print_auto_logged_info(r):
 
 def main(config):
 
-    dm = CardiacMeshPopulationDM(config.root_folder, batch_size=2)
+    """
+    TEST
+    """
+
+    with open("data/cached/cardiac_population_200_meshes.pkl", "rb") as ff:
+        kk = pkl.load(ff)
+
+    dm = CardiacMeshPopulationDM(cardiac_population=kk, batch_size=8)
+    # dm = CardiacMeshPopulationDM(config.root_folder, batch_size=2)
 
     A_t, D_t, U_t, n_nodes = pkl.load(open("data/cached/matrices.pkl", "rb"))
 
     # init model
 
     coma_args = {
-      "num_features": config.network_architecture.n_features,
-      "n_layers": len(config.network_architecture.convolution.parameters.channels), # REDUNDANT
-      "num_conv_filters": config.network_architecture.convolution.parameters.channels,
-      "polygon_order": config.network_architecture.convolution.parameters.polynomial_degree,
-      "latent_dim": config.network_architecture.latent_dim,
-      "is_variational": config.loss.regularization_loss.weight != 0,
-      "downsample_matrices": D_t,
-      "upsample_matrices": U_t, 
-      "adjacency_matrices": A_t,
-      "n_nodes": n_nodes, 
-      "mode": "testing"
+        "num_features": config.network_architecture.n_features,
+        "n_layers": len(
+            config.network_architecture.convolution.parameters.channels
+        ),  # REDUNDANT
+        "num_conv_filters": config.network_architecture.convolution.parameters.channels,
+        "polygon_order": config.network_architecture.convolution.parameters.polynomial_degree,
+        "latent_dim": config.network_architecture.latent_dim,
+        "is_variational": config.loss.regularization_loss.weight != 0,
+        "downsample_matrices": D_t,
+        "upsample_matrices": U_t,
+        "adjacency_matrices": A_t,
+        "n_nodes": n_nodes,
+        "mode": "testing",
     }
-        
-    if config.log_to_mflow:
+
+    if config.log_to_mlflow:
         mlflow.pytorch.autolog()
 
     coma4D = Coma4D(**coma_args)
@@ -82,25 +96,29 @@ def main(config):
     # train
     trainer = pl.Trainer()
 
-    if config.log_to_mflow:
+    if config.log_to_mlflow:
         with mlflow.start_run() as run:
             trainer.fit(model, datamodule=dm)
     else:
         trainer.fit(model, datamodule=dm)
-    
-    
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
 
     import argparse
-    
-    def overwrite_config_items(config, args):
-      for attr, value in args.__dict__.items():
-        if attr in config.keys() and value is not None:
-          config[attr] = value
-       
-    parser = argparse.ArgumentParser(description='Pytorch Trainer for Convolutional Mesh Autoencoders')
 
-    parser.add_argument('-c', '--conf', help='path of config file', default="config_files/default.cfg")
+    def overwrite_config_items(config, args):
+        for attr, value in args.__dict__.items():
+            if attr in config.keys() and value is not None:
+                config[attr] = value
+
+    parser = argparse.ArgumentParser(
+        description="Pytorch Trainer for Convolutional Mesh Autoencoders"
+    )
+
+    parser.add_argument(
+        "-c", "--conf", help="path of config file", default="config/config.yaml"
+    )
     # parser.add_argument('-od', '--output_dir', default=None, help='path where to store output')
     # parser.add_argument('-id', '--data_dir', default=None, help='path where to fetch input data from')
     # parser.add_argument('--preprocessed_data', default=None, type=str, help='Location of cached input data.')
@@ -119,10 +137,19 @@ if __name__ == '__main__':
     # parser.add_argument('--save_all_models', default=False, action="store_true",
     #                     help='Save all models instead of just the best one until the current epoch.')
     # parser.add_argument('--test', default=False, action="store_true", help='Set this flag if you just want to test whether the code executes properly. ')
-    parser.add_argument('--log_to_mflow', default=False, action="store_true", help="Set this flag if you want to log the run's data to MLflow.")
-    parser.add_argument('--dry-run', dest="dry_run", default=False, action="store_true",
-                        help='Dry run: just prints out the parameters of the execution but performs no training.')
-
+    parser.add_argument(
+        "--log_to_mlflow",
+        default=False,
+        action="store_true",
+        help="Set this flag if you want to log the run's data to MLflow.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        default=False,
+        action="store_true",
+        help="Dry run: just prints out the parameters of the execution but performs no training.",
+    )
 
     args = parser.parse_args()
 
@@ -134,14 +161,13 @@ if __name__ == '__main__':
     ################################################################################
     ### Load configuration
     if not os.path.exists(args.conf):
-        logger.error('Config not found' + args.conf)    
+        logger.error("Config not found" + args.conf)
 
     config = load_config(args.conf)
 
     config.log_to_mlflow = args.log_to_mlflow
 
     main(config)
-
 
     # if args.data_dir:
     #     config['data_dir'] = args.data_dir
@@ -157,12 +183,9 @@ if __name__ == '__main__':
     #     config['epoch'] = 20
     #     config['output_dir'] = "output/test_{TIMESTAMP}"
     # config['test'] = args.test
-       
+
     # overwrite_config_items(config, args)
 
     # if args.dry_run:
     #   pprint(config)
     #   exit()
-
-
-
