@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data import TensorDataset, DataLoader, random_split
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 import pytorch_lightning as pl
 
@@ -8,7 +9,7 @@ class SyntheticMeshesDataset(Dataset):
     
     def  __init__(
         self, 
-        pkl_file="data/synthetic/synthetic_population.pkl"
+        pkl_file="data/cached/synthetic_population.pkl"
     ):
         
         import pickle as pkl  
@@ -32,7 +33,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
     '''
     
     def __init__(self, 
-        pkl_file: Union[None, str] ="data/synthetic/synthetic_population.pkl", 
+        pkl_file: Union[None, str] ="data/cached/synthetic_population.pkl", 
         # mesh_population: Union[Mapping, CardiacMeshPopulation, None] = None, 
         batch_size: int = 32,
         split_lengths: Union[None, List[int]]=None,

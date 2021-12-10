@@ -29,65 +29,61 @@ from mlflow.tracking import MlflowClient
 from config.load_config import load_config
 
 from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
+from data.SyntheticDataModules import SyntheticMeshesDM
 
-
-def get_matrices(config, cached_file):
+def get_matrices(config):
 
     M, A, D, U = mesh_operations.generate_transform_matrices(
-        Cardiac3DMesh(config.network_architecture.template_mesh), 
-        config.network_architecture.pooling.parameters.downsampling_factors
+        Cardiac3DMesh(config.network_architecture.template_mesh),
+        config.network_architecture.pooling.parameters.downsampling_factors,
     )
 
-    A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
     n_nodes = [len(M[i].v) for i in range(len(M))]
+    A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
+    
 
-
-    if config.network_architeture.cached_matrices is not None:
-      A_t, D_t, U_t, n_nodes = pkl.load(open(config.network_architeture.cached_matrices, "rb"))
+    if config.network_architecture.cached_matrices is not None:
+        A_t, D_t, U_t, n_nodes = pkl.load(
+            open(config.network_architeture.cached_matrices, "rb")
+        )
 
     return {
         "downsample_matrices": D_t,
         "upsample_matrices": U_t,
         "adjacency_matrices": A_t,
-        "n_nodes": n_nodes
+        "n_nodes": n_nodes,
     }
 
-def get_datamodule(config):
-    
-    with open(config.dataset.cached_file) as ff:
-        data = pkl.load(ff)
-   
-    #TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS 
-    if config.dataset.data_type.startswith("cardiac"):
-        DataModule = CardiacMeshPopulationDM
-    elif config.dataset.data_type.startswith("synthetic"):
-        DataModule = SyntheticMeshesDM
-      
-    dm = DataModule(cardiac_population=data, batch_size=config.optimizer.batch_size)
-    return dm
 
 def get_coma_args(config, matrices):
+
+    net = config.network_architecture
     coma_args = {
-        "num_features": config.network_architecture.n_features,
-        "n_layers": len(
-            config.network_architecture.convolution.parameters.channels
-        ),  # REDUNDANT
-        "num_conv_filters": config.network_architecture.convolution.parameters.channels,
-        "polygon_order": config.network_architecture.convolution.parameters.polynomial_degree,
-        "latent_dim": config.network_architecture.latent_dim,
+        "num_features": net.n_features,
+        "n_layers": len(net.convolution.parameters.channels),  # REDUNDANT
+        "num_conv_filters": net.convolution.parameters.channels,
+        "polygon_order": net.convolution.parameters.polynomial_degree,
+        "latent_dim": net.latent_dim,
         "is_variational": config.loss.regularization_loss.weight != 0,
+        "mode": "testing",
     }
 
     coma_args.update(matrices)
-
-    #{
-    #    "downsample_matrices": D_t,
-    #    "upsample_matrices": U_t,
-    #    "adjacency_matrices": A_t,
-    #    "n_nodes": n_nodes,
-    #    "mode": "testing",
-    #}
     return coma_args
+
+
+def get_datamodule(config):
+
+    with open(config.dataset.cached_file, "rb") as ff:
+        data = pkl.load(ff)
+
+    # TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS
+    if config.dataset.data_type.startswith("cardiac"):
+        dm = CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.optimizer.batch_size)
+    elif config.dataset.data_type.startswith("synthetic"):
+        dm = SyntheticMeshesDM()
+    return dm
+
 
 # optimizers_menu = {
 #   "adam": torch.optim.Adam(coma.parameters(), lr=lr, betas=(0.5,0.99), weight_decay=weight_decay),
@@ -114,9 +110,11 @@ def print_auto_logged_info(r):
 def main(config):
 
     # LOAD DATA
+
     # INIT MODEL
-    matrices = get_matrices("data/cached/matrices.pkl")
+    matrices = get_matrices(config)
     coma_args = get_coma_args(config, matrices)
+    dm = get_datamodule(config)
     coma4D = Coma4D(**coma_args)
     model = CoMA(coma4D, config)
 
@@ -147,7 +145,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c", "--conf", help="path of config file", default="config/config.yaml"
     )
-    
+
     parser.add_argument(
         "--log_to_mlflow",
         default=False,

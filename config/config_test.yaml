@@ -1,9 +1,8 @@
 seed: null
 
 dataset: {
-  data_type: "cardiac_2ch",
-  root_folder: "/media/rodrigo/bd2fea02-a909-49bc-9c6c-e0750941ca71/data/meshes/vtk_meshes/2ch_full_cycle/",
-  cached_file: "data/cached/cardiac_population_200_meshes.pkl"
+  data_type: "synthetic",
+  cached_file: "data/cached/synthetic_population.pkl",
   preprocessing: null
 }
 
@@ -14,8 +13,8 @@ sample_sizes: {
 }
 
 network_architecture: {
-  template_mesh: "data/template.vtk",
-  cached_matrices: null 
+  template_mesh: "data/vedo_sphere_template.vtk",
+  cached_matrices: null,
   latent_dim: 8,
   n_features: 3,
   convolution: { 
@@ -52,6 +51,6 @@ optimizer: {
     lr: 0.001,
     betas: [0.5, 0.99],
     weight_decay: 0.0005
-  }
+  },
   batch_size: 2 
 }
