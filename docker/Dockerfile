@@ -1,1 +1,53 @@
-RUN ubuntu:18.04
+FROM ubuntu:18.04
+
+
+RUN apt-get update &&  apt-get install -y \
+    curl \
+    ca-certificates \
+    vim \
+    sudo \
+    git \
+    bzip2 \
+    libx11-6 \
+ && rm -rf /var/lib/apt/lists/*
+
+# RUN apt-get install -y libboost-dev
+
+# Create a working directory.
+RUN mkdir /app
+WORKDIR /app
+
+# Create a non-root user and switch to it.
+RUN adduser --disabled-password --gecos '' --shell /bin/bash user \
+ && chown -R user:user /app
+RUN echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-user
+USER user
+
+# All users can use /home/user as their home directory.
+ENV HOME=/home/user
+RUN chmod 777 /home/user
+
+# install Miniconda
+RUN curl -so ~/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+ && chmod +x ~/miniconda.sh \
+ && ~/miniconda.sh -b -p ~/miniconda \
+ && rm ~/miniconda.sh
+ENV PATH=/home/user/miniconda/bin:$PATH
+ENV CONDA_AUTO_UPDATE_CONDA=false
+
+# Create a Python 3.9 environment.
+RUN /home/user/miniconda/bin/conda install conda-build
+RUN /home/user/miniconda/bin/conda create -y --name cardiac_motion python=3.9
+RUN /home/user/miniconda/bin/conda clean -ya
+
+ENV CONDA_DEFAULT_ENV=cardiac_motion
+ENV CONDA_PREFIX=/home/user/miniconda/envs/$CONDA_DEFAULT_ENV
+ENV PATH=$CONDA_PREFIX/bin:$PATH
+
+ENV TORCH=1.10
+ENV CUDA=cu113
+
+RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c pytorch
+RUN conda install pyg -c pyg -c conda-forge
+RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
