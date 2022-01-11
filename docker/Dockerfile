@@ -1,6 +1,5 @@
 FROM ubuntu:18.04
 
-
 RUN apt-get update &&  apt-get install -y \
     curl \
     ca-certificates \
@@ -11,7 +10,14 @@ RUN apt-get update &&  apt-get install -y \
     libx11-6 \
  && rm -rf /var/lib/apt/lists/*
 
-# RUN apt-get install -y libboost-dev
+RUN apt-get update
+RUN apt-get install -y gcc
+RUN apt-get install -y make
+RUN apt-get install -y --reinstall build-essential
+RUN apt-get install -y libboost-dev
+
+RUN apt-get update
+RUN apt-get install ffmpeg libsm6 libxext6  -y
 
 # Create a working directory.
 RUN mkdir /app
@@ -46,8 +52,22 @@ ENV PATH=$CONDA_PREFIX/bin:$PATH
 
 ENV TORCH=1.10
 ENV CUDA=cu113
-
 RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c pytorch
+RUN conda install tqdm -c conda-forge
+RUN conda install jupyter -c anaconda
+RUN conda install pytorch-lightning -c conda-forge
+RUN conda install mlflow -c conda-forge
+
 RUN conda install pyg -c pyg -c conda-forge
+
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+
+# Install vtk and others
+RUN pip install vtk meshio nvgpu
+
+# Install psbody-mesh
+WORKDIR /home/user
+RUN git clone https://github.com/MPI-IS/mesh.git
+WORKDIR mesh
+RUN make all
