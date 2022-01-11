@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from IPython import embed
+# from IPython import embed # uncomment for debugging
 
 
 class CoMA(pl.LightningModule):
@@ -82,20 +82,16 @@ class CoMA(pl.LightningModule):
             kld_loss = -0.5 * torch.mean(
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
             )
-
         recon_loss = self.rec_loss_function(
             out, data
         )  # .reshape(-1, self.model.filters[0]))
         train_loss = recon_loss + self.w_kl * kld_loss
 
-        # Why not just passing
         loss_dict = {"kld_loss": kld_loss, "recon_loss": recon_loss, "loss": train_loss}
-
         self.log_dict(loss_dict)
         return loss_dict
 
     def validation_epoch_end(self, outputs):
-        # embed()
 
         avg_kld_loss = torch.stack([x["kld_loss"] for x in outputs]).mean()
 

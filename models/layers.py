@@ -9,6 +9,7 @@ import shlex
 # import sys; sys.path.append(".")
 repo_root = check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
 
+from IPython import embed
 from utils.utils import normal
 
 __author__ = ['Priyanka Patel', 'Rodrigo Bonazzola']
@@ -24,9 +25,10 @@ class ChebConv_Coma(ChebConv):
     def __init__(self, in_channels, out_channels, K, normalization=None, bias=True):
         super(ChebConv_Coma, self).__init__(in_channels, out_channels, K, normalization, bias)
 
-    def reset_parameters(self):
-        normal(self.weight, 0, 0.1) # Same as torch.nn.init.normal_ but handles None's
-        normal(self.bias, 0, 0.1)
+   #def reset_parameters(self):
+   #     embed()
+   #     normal(self.weight, 0, 0.1) # Same as torch.nn.init.normal_ but handles None's
+   #     normal(self.bias, 0, 0.1)
 
 
     # Normalized Laplacian. This is almost entirely copied from the parent class, ChebConv.
@@ -48,13 +50,26 @@ class ChebConv_Coma(ChebConv):
     def forward(self, x, edge_index, norm, edge_weight=None):
         # Tx_i are Chebyshev polynomials of x, which are computed recursively
         Tx_0 = x # Tx_0 is the identity, i.e. Tx_0(x) == x
+
+        #TOFIX: This is a workaround to make my code work with a newer version of PyTorch (1.10),
+        #since the weight attribute seems to be absent in this version.
+        import itertools
+        self.weight = []
+        for i in range(1, 7):
+            try:
+              self.weight.append(next(itertools.islice(self.parameters(), i, None)).t())
+            except:
+              pass
+
         out = torch.matmul(Tx_0, self.weight[0])
 
-        if self.weight.size(0) > 1:
+        # if self.weight.size(0) > 1:
+        if len(self.weight) > 1:
             Tx_1 = self.propagate(edge_index, x=x, norm=norm) # propagate amounts to operator composition
             out = out + torch.matmul(Tx_1, self.weight[1])
 
-        for k in range(2, self.weight.size(0)):
+        # for k in range(2, self.weight.size(0)):
+        for k in range(2, len(self.weight)):
             Tx_2 = 2 * self.propagate(edge_index, x=Tx_1, norm=norm) - Tx_0 # recursive definition of Chebyshev polynomials
             out = out + torch.matmul(Tx_2, self.weight[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
