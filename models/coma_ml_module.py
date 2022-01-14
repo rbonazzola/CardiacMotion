@@ -14,12 +14,27 @@ class CoMA(pl.LightningModule):
 
         super(CoMA, self).__init__()
         self.model = model
-
         self.params = params
 
         # TOFIX: decide it from parameters
         self.rec_loss_function = F.mse_loss
         self.w_kl = self.params.loss.regularization_loss.weight
+
+    def on_fit_start(self):
+
+        #TODO: check of alternatives since .to(device) is not recommended
+        #This is the most elegant way I found so far to transfer the tensors to the right device (if run within __init__, I get self.device=="cpu")
+
+        for i, _ in enumerate(self.model.downsample_matrices):
+            self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
+            self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
+            self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
+
+        for i, _ in enumerate(self.model.A_edge_index):
+            self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
+            self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
+
+
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         return self.model(input, **kwargs)

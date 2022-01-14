@@ -17,6 +17,7 @@ import pytorch_lightning as pl
 
 import ipywidgets as widgets
 from IPython.display import display, HTML
+from IPython import embed
 
 from utils import mesh_operations
 from utils.helpers import *
@@ -110,16 +111,17 @@ def print_auto_logged_info(r):
 def main(config):
 
     # LOAD DATA
+    dm = get_datamodule(config)
 
     # INIT MODEL
+    embed()
     matrices = get_matrices(config)
     coma_args = get_coma_args(config, matrices)
-    dm = get_datamodule(config)
     coma4D = Coma4D(**coma_args)
     model = CoMA(coma4D, config)
 
     # train
-    trainer = pl.Trainer()
+    trainer = pl.Trainer(gpus=1)
 
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()

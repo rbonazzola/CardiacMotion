@@ -84,7 +84,7 @@ class Coma(torch.nn.Module):
             ChebConv_Coma.norm(self.adjacency_matrices[i]._indices(), self.n_nodes[i])
             for i in range(len(self.n_nodes))
         ])
-        return adj_edge_index, adj_norm
+        return list(adj_edge_index), list(adj_norm)
 
 
     def set_mode(self, mode):
@@ -222,7 +222,7 @@ class Coma4D(Coma):
         s_out = []
 
         for t in range(self.n_timeframes):
-
+           
             x = self.dec_lin(z_t[:,t,:])
             x = F.relu(x)        
 
@@ -284,6 +284,7 @@ class Coma4D(Coma):
         exp_it = np.expand_dims(exp_it, axis=(0,2))
         exp_it = torch.Tensor(exp_it)
         exp_it = exp_it.reshape(self.n_timeframes, 1, 2)
+        exp_it = exp_it.to(z.device)
 
         # trick to achieve the desired dimensions
         z = z.reshape(-1, 1, self.z, 1)

@@ -55,7 +55,8 @@ class ChebConv_Coma(ChebConv):
         #since the weight attribute seems to be absent in this version.
         import itertools
         self.weight = []
-        for i in range(1, 7):
+        #TODO: change this range
+        for i in range(1, 7):            
             try:
               self.weight.append(next(itertools.islice(self.parameters(), i, None)).t())
             except:
