@@ -1,4 +1,5 @@
-FROM ubuntu:18.04
+# FROM ubuntu:18.04
+FROM nvidia/cuda:10.2-cudnn8-runtime-ubuntu18.04
 
 RUN apt-get update &&  apt-get install -y \
     curl \
@@ -8,6 +9,7 @@ RUN apt-get update &&  apt-get install -y \
     git \
     bzip2 \
     libx11-6 \
+    wget \
  && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update
@@ -51,8 +53,8 @@ ENV CONDA_PREFIX=/home/user/miniconda/envs/$CONDA_DEFAULT_ENV
 ENV PATH=$CONDA_PREFIX/bin:$PATH
 
 ENV TORCH=1.10
-ENV CUDA=cu113
-RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c pytorch
+ENV CUDA=cu102
+RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=10.2 -c pytorch
 RUN conda install tqdm -c conda-forge
 RUN conda install jupyter -c anaconda
 RUN conda install pytorch-lightning -c conda-forge
@@ -62,6 +64,14 @@ RUN conda install pyg -c pyg -c conda-forge
 
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+
+#RUN apt-get update 
+RUN sudo apt-get install && sudo apt-get install -y module-init-tools
+
+# RUN sudo apt-get install linux-headers-4.4.0-1122-aws
+
+# RUN wget https://us.download.nvidia.com/tesla/440.118.02/NVIDIA-Linux-x86_64-440.118.02.run
+# RUN sudo bash NVIDIA-Linux-x86_64-440.118.02.run -s
 
 # Install vtk and others
 RUN pip install vtk meshio nvgpu
