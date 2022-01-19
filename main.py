@@ -122,7 +122,7 @@ def main(config):
 
     # train
     trainer = pl.Trainer(
-      callbacks=[EarlyStopping(monitor="val_loss", mode="min")]
+      callbacks=[EarlyStopping(monitor="loss", mode="min")]
     )
 
     if config.log_to_mlflow:
