@@ -122,6 +122,7 @@ def main(config):
 
     # train
     trainer = pl.Trainer(
+      gpus=1,
       callbacks=[EarlyStopping(monitor="loss", mode="min")]
     )
 
