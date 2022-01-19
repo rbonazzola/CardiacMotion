@@ -1,5 +1,6 @@
 # FROM ubuntu:18.04
-FROM nvidia/cuda:10.2-cudnn8-runtime-ubuntu18.04
+FROM nvidia/cuda:11.3.1-cudnn8-devel-ubuntu18.04
+# nvidia/cuda:10.2-cudnn8-devel-ubuntu18.04
 
 RUN apt-get update &&  apt-get install -y \
     curl \
@@ -53,8 +54,8 @@ ENV CONDA_PREFIX=/home/user/miniconda/envs/$CONDA_DEFAULT_ENV
 ENV PATH=$CONDA_PREFIX/bin:$PATH
 
 ENV TORCH=1.10
-ENV CUDA=cu102
-RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=10.2 -c pytorch
+ENV CUDA=cu113
+RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c pytorch
 RUN conda install tqdm -c conda-forge
 RUN conda install jupyter -c anaconda
 RUN conda install pytorch-lightning -c conda-forge
