@@ -3,6 +3,7 @@ import yaml
 import logging
 import pickle as pkl
 import utils.VTKHelpers
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from CardiacMesh import Cardiac3DMesh, Cardiac4DMesh, CardiacMeshPopulation
 from models import layers
@@ -113,20 +114,22 @@ def main(config):
     # LOAD DATA
     dm = get_datamodule(config)
 
-    # INIT MODEL
-    embed()
+    # INIT MODEL    
     matrices = get_matrices(config)
     coma_args = get_coma_args(config, matrices)
     coma4D = Coma4D(**coma_args)
     model = CoMA(coma4D, config)
 
     # train
-    trainer = pl.Trainer(gpus=1)
+    trainer = pl.Trainer(
+      callbacks=[EarlyStopping(monitor="val_loss", mode="min")]
+    )
 
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         with mlflow.start_run() as run:
             trainer.fit(model, datamodule=dm)
+            print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
 
