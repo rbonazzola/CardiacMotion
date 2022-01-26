@@ -10,6 +10,7 @@ from models import layers
 
 from pprint import pprint
 from argparse import Namespace
+from subprocess import check_output
 
 import numpy as np
 import torch
@@ -129,6 +130,7 @@ def main(config):
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         with mlflow.start_run() as run:
+            mlflow.log_param("platform", check_output(["hostname"]).strip().decode())
             trainer.fit(model, datamodule=dm)
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
@@ -149,11 +151,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-c", "--conf", help="path of config file", default="config/config.yaml"
+        "-c", "--conf", 
+        help="path of config file", 
+        default="config/config_test.yaml"
     )
 
     parser.add_argument(
-        "--log_to_mlflow",
+        "--dont_log_to_mlflow",
         default=False,
         action="store_true",
         help="Set this flag if you want to log the run's data to MLflow.",
@@ -173,5 +177,5 @@ if __name__ == "__main__":
         logger.error("Config not found" + args.conf)
 
     config = load_config(args.conf)
-    config.log_to_mlflow = args.log_to_mlflow
+    config.log_to_mlflow = not args.dont_log_to_mlflow
     main(config)
