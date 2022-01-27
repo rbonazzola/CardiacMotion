@@ -6,8 +6,8 @@ import torch.nn.functional as F
 
 class CoMA(pl.LightningModule):
     """
-    model: provide
-    params:
+    model: provide the PyTorch model.
+    params: 
     """
 
     def __init__(self, model, params):
@@ -16,14 +16,16 @@ class CoMA(pl.LightningModule):
         self.model = model
         self.params = params
 
+        self.w_kl = self.params.loss.regularization_loss.weight
         # TOFIX: decide it from parameters
         self.rec_loss_function = F.mse_loss
-        self.w_kl = self.params.loss.regularization_loss.weight
+        
 
     def on_fit_start(self):
 
         #TODO: check of alternatives since .to(device) is not recommended
-        #This is the most elegant way I found so far to transfer the tensors to the right device (if run within __init__, I get self.device=="cpu")
+        #This is the most elegant way I found so far to transfer the tensors to the right device 
+        #(if this is run within __init__, I get self.device=="cpu")
 
         for i, _ in enumerate(self.model.downsample_matrices):
             self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)

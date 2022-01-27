@@ -157,18 +157,40 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--dont_log_to_mlflow",
-        default=False,
-        action="store_true",
-        help="Set this flag if you want to log the run's data to MLflow.",
+        "--w_kl",
+        help="Weight of the Kullback-Leibler regularization term.",
+        type=float, 
+        default=None
     )
+
     parser.add_argument(
-        "--dry-run",
-        dest="dry_run",
+        "--latent_dim",
+        help="Dimension of the latent space", 
+        type=int,
+        default=None
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        help="Dimension of the latent space",
+        type=int,
+        default=None
+    )
+
+    parser.add_argument(
+        "--disable_mlflow_logging",
         default=False,
         action="store_true",
-        help="Dry run: just prints out the parameters of the execution but performs no training.",
+        help="Set this flag if you don't want to log the run's data to MLflow.",
     )
+
+    #parser.add_argument(
+    #    "--dry-run",
+    #    dest="dry_run",
+    #    default=False,
+    #    action="store_true",
+    #    help="Dry run: just prints out the parameters of the execution but performs no training.",
+    #)
 
     args = parser.parse_args()
 
@@ -177,5 +199,5 @@ if __name__ == "__main__":
         logger.error("Config not found" + args.conf)
 
     config = load_config(args.conf)
-    config.log_to_mlflow = not args.dont_log_to_mlflow
+    config.log_to_mlflow = not args.disable_mlflow_logging
     main(config)
