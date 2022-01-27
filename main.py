@@ -158,21 +158,21 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--w_kl",
-        help="Weight of the Kullback-Leibler regularization term.",
+        help="Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
         type=float, 
         default=None
     )
 
     parser.add_argument(
         "--latent_dim",
-        help="Dimension of the latent space", 
+        help="Dimension of the latent space. If provided will overwrite the batch size from the configuration file.", 
         type=int,
         default=None
     )
 
     parser.add_argument(
         "--batch_size",
-        help="Dimension of the latent space",
+        help="Training batch size. If provided will overwrite the batch size from the configuration file.",
         type=int,
         default=None
     )
