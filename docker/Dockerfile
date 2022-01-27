@@ -59,18 +59,17 @@ RUN conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c py
 RUN conda install tqdm -c conda-forge
 RUN conda install jupyter -c anaconda
 RUN conda install pytorch-lightning -c conda-forge
-RUN conda install mlflow -c conda-forge
+RUN conda install mlflow==1.23 -c conda-forge
 
 RUN conda install pyg -c pyg -c conda-forge
 
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 
-#RUN apt-get update 
-RUN sudo apt-get install && sudo apt-get install -y module-init-tools
-
+# I am including this in case it's needed, but at the moment I'm using the host's Nvidia drivers.
+# RUN apt-get update 
+# RUN sudo apt-get install && sudo apt-get install -y module-init-tools
 # RUN sudo apt-get install linux-headers-4.4.0-1122-aws
-
 # RUN wget https://us.download.nvidia.com/tesla/440.118.02/NVIDIA-Linux-x86_64-440.118.02.run
 # RUN sudo bash NVIDIA-Linux-x86_64-440.118.02.run -s
 
