@@ -58,19 +58,21 @@ def get_matrices(config):
     }
 
 
-def get_coma_args(config, matrices):
+def get_coma_args(config):
 
     net = config.network_architecture
+    convs = net.convolution.parameters
     coma_args = {
         "num_features": net.n_features,
-        "n_layers": len(net.convolution.parameters.channels),  # REDUNDANT
-        "num_conv_filters": net.convolution.parameters.channels,
-        "polygon_order": net.convolution.parameters.polynomial_degree,
+        "n_layers": len(convs.channels),  # REDUNDANT
+        "num_conv_filters": convs.channels,
+        "polygon_order": convs.polynomial_degree,
         "latent_dim": net.latent_dim,
         "is_variational": config.loss.regularization_loss.weight != 0,
         "mode": "testing",
     }
-
+    
+    matrices = get_matrices(config)
     coma_args.update(matrices)
     return coma_args
 
@@ -110,14 +112,13 @@ def print_auto_logged_info(r):
     print("tags: {}".format(tags))
 
 
-def main(config):
+def get_dm_model_trainer(config):
 
     # LOAD DATA
     dm = get_datamodule(config)
 
     # INIT MODEL    
-    matrices = get_matrices(config)
-    coma_args = get_coma_args(config, matrices)
+    coma_args = get_coma_args(config)
     coma4D = Coma4D(**coma_args)
     model = CoMA(coma4D, config)
 
@@ -127,10 +128,18 @@ def main(config):
       callbacks=[EarlyStopping(monitor="loss", mode="min")]
     )
 
+    return dm, model, trainer
+
+def main(config):
+
+    dm, model, trainer = get_dm_model_trainer(config)    
+    
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         with mlflow.start_run() as run:
             mlflow.log_param("platform", check_output(["hostname"]).strip().decode())
+            mlflow.log_param("w_kl", config.loss.regularization_loss.weight)
+            mlflow.log_param("latent_dim", config.network_architecture.latent_dim)
             trainer.fit(model, datamodule=dm)
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
@@ -198,6 +207,6 @@ if __name__ == "__main__":
     if not os.path.exists(args.conf):
         logger.error("Config not found" + args.conf)
 
-    config = load_config(args.conf)
+    config = load_config(args.conf, args)
     config.log_to_mlflow = not args.disable_mlflow_logging
     main(config)
