@@ -41,8 +41,10 @@ class CoMA(pl.LightningModule):
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         return self.model(input, **kwargs)
 
+
     def on_train_epoch_start(self):
         self.model.set_mode("training")
+
 
     def training_step(self, batch, batch_idx):
 
@@ -60,24 +62,25 @@ class CoMA(pl.LightningModule):
         )  # .reshape(-1, self.model.filters[0]))
         train_loss = recon_loss + self.w_kl * kld_loss
 
-        loss_dict = {"kld_loss": kld_loss, "recon_loss": recon_loss, "loss": train_loss}
+        loss_dict = {"training_kld_loss": kld_loss, "training_recon_loss": recon_loss, "training_loss": train_loss}
 
         # https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#log-dict
         self.log_dict(loss_dict)
         return loss_dict
 
+
     def training_epoch_end(self, outputs):
 
         # Aggregate metrics from each batch
 
-        avg_kld_loss = torch.stack([x["kld_loss"] for x in outputs]).mean()
+        avg_kld_loss = torch.stack([x["training_kld_loss"] for x in outputs]).mean()
 
-        avg_recon_loss = torch.stack([x["recon_loss"] for x in outputs]).mean()
+        avg_recon_loss = torch.stack([x["training_recon_loss"] for x in outputs]).mean()
 
-        avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        avg_loss = torch.stack([x["training_loss"] for x in outputs]).mean()
 
         self.log_dict(
-            {"kld_loss": avg_kld_loss, "recon_loss": avg_recon_loss, "loss": avg_loss},
+            {"training_kld_loss": avg_kld_loss, "training_recon_loss": avg_recon_loss, "training_loss": avg_loss},
             on_epoch=True,
             prog_bar=True,
             logger=True,
@@ -99,36 +102,45 @@ class CoMA(pl.LightningModule):
             kld_loss = -0.5 * torch.mean(
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
             )
+
         recon_loss = self.rec_loss_function(
             out, data
         )  # .reshape(-1, self.model.filters[0]))
         train_loss = recon_loss + self.w_kl * kld_loss
 
-        loss_dict = {"kld_loss": kld_loss, "recon_loss": recon_loss, "loss": train_loss}
+        loss_dict = {"val_kld_loss": kld_loss, "val_recon_loss": recon_loss, "val_loss": train_loss}
         self.log_dict(loss_dict)
         return loss_dict
 
+
     def validation_epoch_end(self, outputs):
 
-        avg_kld_loss = torch.stack([x["kld_loss"] for x in outputs]).mean()
+        avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
 
-        avg_recon_loss = torch.stack([x["recon_loss"] for x in outputs]).mean()
+        avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
 
-        avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
 
         self.log_dict(
-            {"kld_loss": avg_kld_loss, "recon_loss": avg_recon_loss, "loss": avg_loss},
+            {"val_kld_loss": avg_kld_loss, "val_recon_loss": avg_recon_loss, "val_loss": avg_loss},
             on_epoch=True,
             prog_bar=True,
             logger=True,
         )
 
     # def test_step(self):
+    # Same as validation step (by default of Pytorch Lightning)
+
 
     def test_epoch_end(self):
-        avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
-        self.log({"loss": avg_loss})
-        pass
+        avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
+        avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
+        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        
+        self.log_dict(
+            {"val_kld_loss": avg_kld_loss, "val_recon_loss": avg_recon_loss, "val_loss": avg_loss}
+        )
+
 
     # TODO: Select optimizer from menu (dict)
     def configure_optimizers(self):

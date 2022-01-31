@@ -125,7 +125,7 @@ def get_dm_model_trainer(config):
     # train
     trainer = pl.Trainer(
       gpus=1,
-      callbacks=[EarlyStopping(monitor="loss", mode="min")]
+      callbacks=[EarlyStopping(monitor="val_loss", mode="min")]
     )
 
     return dm, model, trainer
