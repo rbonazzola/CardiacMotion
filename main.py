@@ -133,12 +133,12 @@ def get_dm_model_trainer(config):
 def get_mlflow_parameters(config):
 
     mlflow_parameters = {
-      "platform", check_output(["hostname"]).strip().decode(),
-      "w_kl", config.loss.regularization_loss.weight,
-      "latent_dim", config.network_architecture.latent_dim,
-      "convolution_type", config.network_architecture.convolution.type,
-      "n_channels", config.network_architecture.convolution.parameters.channels,
-      "reduction_factors", config.network_architecture.pooling.parameters.downsampling_factors
+      "platform": check_output(["hostname"]).strip().decode(),
+      "w_kl": config.loss.regularization_loss.weight,
+      "latent_dim": config.network_architecture.latent_dim,
+      "convolution_type": config.network_architecture.convolution.type,
+      "n_channels": config.network_architecture.convolution.parameters.channels,
+      "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors
     }
 
     return mlflow_parameters
@@ -151,7 +151,7 @@ def main(config):
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         with mlflow.start_run() as run:
-            for k, v in get_mlflow_parameters(config):
+            for k, v in get_mlflow_parameters(config).items():
               mlflow.log_param(k, v)
             trainer.fit(model, datamodule=dm)
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
