@@ -4,7 +4,6 @@ from .layers import ChebConv_Coma, Pool
 from IPython import embed
 import numpy as np
 
-
 __author__ = ['Priyanka Patel', 'Rodrigo Bonazzola']
 
 class Coma(torch.nn.Module):
@@ -53,6 +52,8 @@ class Coma(torch.nn.Module):
         self.dec_lin = torch.nn.Linear(self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
 
         self.z_aggr_function = z_aggr_function
+
+        # TODO: decide activation functions to parameters
 
         self.reset_parameters()
 

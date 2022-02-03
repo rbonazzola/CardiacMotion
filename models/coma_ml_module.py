@@ -18,14 +18,14 @@ class CoMA(pl.LightningModule):
 
         self.w_kl = self.params.loss.regularization_loss.weight
         # TOFIX: decide it from parameters
-        self.rec_loss_function = F.mse_loss
+        self.rec_loss_function = F.mse_loss        
         
 
     def on_fit_start(self):
 
         #TODO: check of alternatives since .to(device) is not recommended
         #This is the most elegant way I found so far to transfer the tensors to the right device 
-        #(if this is run within __init__, I get self.device=="cpu")
+        #(if this is run within __init__, I get self.device=="cpu" even when I use a GPU, so it doesn't work there)
 
         for i, _ in enumerate(self.model.downsample_matrices):
             self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
@@ -103,9 +103,7 @@ class CoMA(pl.LightningModule):
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
             )
 
-        recon_loss = self.rec_loss_function(
-            out, data
-        )  # .reshape(-1, self.model.filters[0]))
+        recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
         train_loss = recon_loss + self.w_kl * kld_loss
 
         loss_dict = {"val_kld_loss": kld_loss, "val_recon_loss": recon_loss, "val_loss": train_loss}
@@ -115,10 +113,10 @@ class CoMA(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
 
+        #TODO: iterate over keys of the elements of `outputs`
+
         avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
-
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
-
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
 
         self.log_dict(
@@ -133,6 +131,7 @@ class CoMA(pl.LightningModule):
 
 
     def test_epoch_end(self):
+
         avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
@@ -150,3 +149,5 @@ class CoMA(pl.LightningModule):
         parameters = vars(self.params.optimizer.parameters)
         optimizer = algorithm(self.model.parameters(), **parameters)
         return optimizer
+
+    
