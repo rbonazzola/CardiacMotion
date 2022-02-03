@@ -1,0 +1,10 @@
+{
+  "amplitude_static_max": 0.1,
+  "amplitude_dynamic_max": 0.03,
+  "N": 5000, 
+  "T": 20,
+  "freq_max": 3,
+  "l_max": 2,
+  "mesh_resolution": 12,
+  "random_seed": 101
+}

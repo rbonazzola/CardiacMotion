@@ -48,7 +48,7 @@ def generate_gif(mesh4D, mesh_connectivity, filename, camera_position='xy', show
     plotter.close()
     
     
-def generate_gif_population(population, mesh_connectivity, N_gifs=10, camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
+def generate_gif_population(population, mesh_connectivity, N_gifs=10, output_dir=".", camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
     
     '''
       population: population of moving meshes.
@@ -59,7 +59,7 @@ def generate_gif_population(population, mesh_connectivity, N_gifs=10, camera_pos
     for i, moving_mesh in enumerate(population):
         if verbose: print(i)
         for camera_position in camera_positions:        
-            filename = "gifs/subject{}_{}.gif".format(i, camera_position)
+            filename = os.path.join(output_dir, "gifs/subject{}_{}.gif".format(i, camera_position))
             generate_gif(moving_mesh, mesh_connectivity, filename, camera_position, **kwargs)        
         if i == N_gifs:
             break
