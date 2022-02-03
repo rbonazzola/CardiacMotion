@@ -3,19 +3,18 @@ from torch.utils.data import Dataset
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 import pytorch_lightning as pl
-
+import pickle as pkl
 
 class SyntheticMeshesDataset(Dataset):
     
-    def  __init__(
-        self, 
-        pkl_file="data/cached/synthetic_population.pkl"
-    ):
-        
-        import pickle as pkl  
-        popu = pkl.load(open(pkl_file, "rb"))
-        self.meshes = torch.Tensor(popu["population_meshes"])
-        self.coefficients = popu["coefficients"]
+    def  __init__(self, pkl_file="data/cached/synthetic_population.pkl"):
+                
+        mesh_popu = pkl.load(open(pkl_file, "rb"))
+        self.avg_meshes = torch.Tensor(mesh_popu["time_avg_mesh"])
+        self.meshes = torch.Tensor(mesh_popu["moving_mesh"])
+        self.coefficients = mesh_popu["coefficients"]
+        self.template_mesh = mesh_popu["template_mesh"]
+        self.params = mesh_popu["params"]
 
     def __getitem__(self, index):
         return self.meshes[index]
@@ -25,7 +24,7 @@ class SyntheticMeshesDataset(Dataset):
         
     
 #TODO: determine whether this new class is necessary
-#Probably better to replace the CardiacMeshDM for a more generic class that handles synthetic data as well
+#Probably better to replace the CardiacMeshDM for a more generic class that handles synthetic data as well, maybe RegisteredMeshDM
 class SyntheticMeshesDM(pl.LightningDataModule):
     
     '''
@@ -42,24 +41,19 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
         '''
         params:
-            pkl_file: path to pickle file containing a dictionary with keys "population_meshes" and "coefficients"
-            mesh_population: 
+            pkl_file: path to pickle file containing a dictionary with keys "population_meshes" and "coefficients"            
             batch_size: batch size for training.
             split_lengths: number of samples for training, validation and testing (in that order). 
                            The last (# sample in testing) is not used and is computed as the difference.
             split_fractions: same as split_lengths but with fractions instead of number of samples. 
-                             The previous argument takes precedence over this if both are provided.
-                             
+                             The previous argument takes precedence over this if both are provided.                             
         '''
         
         super().__init__()
         self.pkl_file = pkl_file
-        # self.cardiac_population = cardiac_population
+        self.batch_size = batch_size        
+        self.split_lengths = split_lengths
 
-        self.batch_size = batch_size
-        
-        self.split_lengths = None
-        
         if self.split_lengths is None:
             if split_fractions is not None:
                 self.split_fractions = split_fractions   
@@ -73,11 +67,12 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
         if self.split_lengths is None:
             train_len = int(self.split_fractions[0] * len(popu))
-            test_len = int(self.split_fractions[1] * len(popu))
-            val_len = len(popu) - train_len - test_len
+            val_len = int(self.split_fractions[1] * len(popu))            
+            test_len = len(popu) - train_len - val_len
+            
             self.split_lengths = [train_len, val_len, test_len]
 
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(popu, self.split_lengths)        
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(popu, self.split_lengths)
 
 
     def train_dataloader(self):

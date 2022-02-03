@@ -44,15 +44,8 @@ def cache_sin_and_cos(freq_max, Nt):
        of the sine and cosine functions
     '''
     
-    sin_n = { 
-        w: np.array([np.sin(2*w*np.pi*i/Nt) for i in range(Nt)]) 
-        for w in range(1,freq_max) 
-    }
-    
-    cos_n = { 
-        w: np.array([np.cos(2*w*np.pi*i/Nt) for i in range(Nt)])
-        for w in range(1,freq_max) 
-    }
+    sin_n = { w: np.array([np.sin(2*w*np.pi*i/Nt) for i in range(Nt)]) for w in range(1, freq_max+1) }    
+    cos_n = { w: np.array([np.cos(2*w*np.pi*i/Nt) for i in range(Nt)]) for w in range(1, freq_max+1) }
 
     return sin_n, cos_n
 
@@ -60,10 +53,10 @@ def cache_sin_and_cos(freq_max, Nt):
 def cache_Ylm(sphere_coords, l_max):
     
     '''
-    Generate spherical harmonics for a set of locations across the sphere.
+    Generate (real) spherical harmonics for a set of locations across (theta, phi) the sphere.
     params:
        sphere_coords: numpy.array of shape (M, 2) where M is the number of points, 
-                      containing the theta and phi coordinates of the points of the discretization.
+                      containing the (theta, phi) coordinates of the points of the discretization.
        indices: list of (l,m) indices
     returns:
        a dictionary where the keys are the (l,m) indices 
@@ -118,42 +111,44 @@ def cache_base_functions(sphere_coords, l_max, freq_max, Nt):
 def sample_coefficients(l_max, freq_max=None, amplitude_max=0.1, random_seed=None):
         
     if random_seed is not None:
-       random.seed(random_seed)
+        random.seed(random_seed)
         
     if freq_max is not None:
-      amplitude_lmn = {"sin":{}, "cos":{}}
-      for n in range(1,freq_max):
-        for l in range(l_max+1):
-           for m in range(-l,l+1):
-             amplitude_lmn["cos"][(l,m,n)] = random.gauss(0, amplitude_max)     
-             amplitude_lmn["sin"][(l,m,n)] = random.gauss(0, amplitude_max)     
-      return amplitude_lmn
+        amplitude_lmn = {"sin":{}, "cos":{}}
+        for n in range(1, freq_max):
+          for l in range(l_max+1):
+             for m in range(-l, l+1):
+               amplitude_lmn["cos"][(l,m,n)] = random.gauss(0, amplitude_max)     
+               amplitude_lmn["sin"][(l,m,n)] = random.gauss(0, amplitude_max)     
+        return amplitude_lmn
 
     else:
-      amplitude_lm = {}      
-      for l in range(l_max+1):
-         for m in range(-l, l+1):
-           amplitude_lm[(l,m)] = random.gauss(0, amplitude_max)     
-      return amplitude_lm    
+        amplitude_lm = {}      
+        for l in range(l_max+1):
+           for m in range(-l, l+1):
+             amplitude_lm[(l,m)] = random.gauss(0, amplitude_max)     
+        return amplitude_lm    
 
 
-def generate_population(N, T, l_max, freq_max, amplitude_static_max, amplitude_dynamic_max, mesh_resolution, random_seed, verbose=False):
+def generate_population(N, T, l_max, freq_max, amplitude_static_max, amplitude_dynamic_max, mesh_resolution, random_seed=None, verbose=False):
     
     '''
     params: 
-      N:
-      T: 
-      l_max:
-      freq_max:
-      amplitude_static_max:
-      amplitude_dynamic_max:
-      random_seed:
-      mesh_resolution:
+      N (int): number of subjects
+      T (int): number of time points across the cycle
+      l_max (int): maximum l coefficient of the expansion in spherical harmonics
+      freq_max (int): maximum multiple of the fundamental frequency
+      amplitude_static_max (float): variance of the "content" coefficients 
+      amplitude_dynamic_max (float): variance of the "style" coefficients 
+      random_seed (int): seed to produce the random coefficients of the population.
+      mesh_resolution (int): resolution of the spherical mesh as taken by vedo.
+      verbose (boolean): if True, prints out the subject's indices (every 100) while generating them.
 
     return value:
-      avg_shape_list: 
-      time_seq_list: list of moving meshes for the N individuals.
+      avg_shape_list: list of static meshes for the N individuals, i.e. N 3D meshes.
+      time_seq_list: list of T moving meshes for the N individuals, i.e. T x N 3D meshes.
       coefs: coefficients for each of {1|sin(nt)|cos(nt)} * Ylm(theta, phi).
+      ref_shape: Trimesh object representing the sphere.
     '''
 
     sphere = vedo.Sphere(res=mesh_resolution).to_trimesh()
@@ -164,14 +159,16 @@ def generate_population(N, T, l_max, freq_max, amplitude_static_max, amplitude_d
     time_seq_list = []
     coefs = []
 
+    if random_seed is not None:
+        random.seed(random_seed)
+
     # Loop through individuals
     for i in range(N):
 
         if verbose and (i % 100) == 0: print(i)
 
-        # Generate latent variables for a single individual
-        mesh_i = []
-        amplitude_lm0 = sample_coefficients(l_max, amplitude_max=amplitude_static_max)
+        # Generate latent variables for a single individual        
+        amplitude_lm0 = sample_coefficients(l_max, freq_max=None, amplitude_max=amplitude_static_max)
         amplitude_lmn = sample_coefficients(l_max, freq_max, amplitude_max=amplitude_dynamic_max)
         coefs.append([amplitude_lm0, amplitude_lmn])
         #####
@@ -189,20 +186,20 @@ def generate_population(N, T, l_max, freq_max, amplitude_static_max, amplitude_d
             np.kron(np.ones((3, 1)), static_deformations).transpose()
         )
 
-        # average deformation of the shape across the cycle (i.e. the content component)
+        # average deformation of the shape across the cycle (i.e. the "content" component)
         avg_shape_list.append(avg_deformed_sphere)
 
-        # Loop through time to perform dynamic (style) deformations
+        mesh_i = []
+        # Loop through time to perform dynamic (style) deformations        
         for t in range(T):
+            deformed_sphere = avg_deformed_sphere.copy()                            
             
-            deformed_sphere = sphere.copy()
-            dynamic_deformations = np.zeros(sphere_coords.shape[0])            
-            
+            dynamic_deformations = np.zeros(sphere_coords.shape[0])                        
             for l, m, n in amplitude_lmn["sin"]:
                 dynamic_deformations += amplitude_lmn["sin"][l, m, n] * f_lmn[l, m][n][:, t]
                 dynamic_deformations += amplitude_lmn["cos"][l, m, n] * g_lmn[l, m][n][:, t]
                     
-            deformed_sphere.vertices = avg_deformed_sphere.vertices + np.multiply(
+            deformed_sphere.vertices += np.multiply(
                 sphere.vertices, np.kron(np.ones((3, 1)), dynamic_deformations).transpose()
             )
 
@@ -210,4 +207,7 @@ def generate_population(N, T, l_max, freq_max, amplitude_static_max, amplitude_d
         
         time_seq_list.append(mesh_i)
 
-    return avg_shape_list, time_seq_list, coefs
+    avg_meshes_np = np.array([np.array(pp.vertices) for pp in avg_shape_list])
+    moving_meshes_np = np.array([ np.array([ np.array(mesh_t.vertices) for mesh_t in subj ]) for subj in time_seq_list ])
+
+    return avg_meshes_np, moving_meshes_np, coefs, sphere

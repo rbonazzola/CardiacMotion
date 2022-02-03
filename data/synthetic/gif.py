@@ -10,7 +10,7 @@ import re
 import random
 
 
-def generate_gif(mesh4D, mesh_connectivity, filename, camera_position='xy'):
+def generate_gif(mesh4D, mesh_connectivity, filename, camera_position='xy', show_edges=False, **kwargs):
     
     '''
     Produces a gif file representing the motion of the input mesh.
@@ -34,12 +34,12 @@ def generate_gif(mesh4D, mesh_connectivity, filename, camera_position='xy'):
     # Open a gif
     plotter.open_gif(filename) 
 
-    kk = pv.PolyData(np.array(mesh4D[0].vertices), mesh_connectivity)
+    kk = pv.PolyData(np.array(mesh4D[0]), mesh_connectivity)
     # plotter.add_mesh(kk, smooth_shading=True, opacity=0.5 )#, show_edges=True)
-    plotter.add_mesh(kk, show_edges=True) 
+    plotter.add_mesh(kk, show_edges=show_edges) 
     
     for t, _ in enumerate(mesh4D):
-        kk = pv.PolyData(np.array(mesh4D[t].vertices), mesh_connectivity)
+        kk = pv.PolyData(np.array(mesh4D[t]), mesh_connectivity)
         plotter.camera_position = camera_position
         plotter.update_coordinates(kk.points, render=False)
         plotter.render()             
@@ -48,7 +48,7 @@ def generate_gif(mesh4D, mesh_connectivity, filename, camera_position='xy'):
     plotter.close()
     
     
-def generate_gif_population(population, mesh_connectivity, N_gifs=10, camera_positions=['xy', 'yz', 'xz'], verbose=False):
+def generate_gif_population(population, mesh_connectivity, N_gifs=10, camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
     
     '''
       population: population of moving meshes.
@@ -60,6 +60,6 @@ def generate_gif_population(population, mesh_connectivity, N_gifs=10, camera_pos
         if verbose: print(i)
         for camera_position in camera_positions:        
             filename = "gifs/subject{}_{}.gif".format(i, camera_position)
-            generate_gif(moving_mesh, mesh_connectivity, filename, camera_position)        
+            generate_gif(moving_mesh, mesh_connectivity, filename, camera_position, **kwargs)        
         if i == N_gifs:
             break
