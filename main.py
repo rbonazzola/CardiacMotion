@@ -21,15 +21,12 @@ from data.SyntheticDataModules import SyntheticMeshesDM
 def get_matrices(config, dm, cache=True, from_cached=True):
 
     mesh_popu = dm.train_dataset.dataset.mesh_popu
-    if cache:
-      matrices_hash = hash((mesh_popu._object_hash, tuple(config.network_architecture.pooling.parameters.downsampling_factors))) % 1000000
-      cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
-
-      if from_cached and os.path.exists(cached_file):
-          A_t, D_t, U_t, n_nodes = pkl.load(
-              open(cached_file, "rb")
-          )
-      else:
+    matrices_hash = hash((mesh_popu._object_hash, tuple(config.network_architecture.pooling.parameters.downsampling_factors))) % 1000000
+    cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
+    
+    if from_cached and os.path.exists(cached_file):
+        A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
+    else:
           template_mesh = Mesh(mesh_popu.template.vertices, mesh_popu.template.faces)
           M, A, D, U = mesh_operations.generate_transform_matrices(
             template_mesh, config.network_architecture.pooling.parameters.downsampling_factors,
