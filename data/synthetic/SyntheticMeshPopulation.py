@@ -189,10 +189,10 @@ class SyntheticMeshPopulation(object):
             time_seq_list.append(mesh_i)
     
         # convert avg_shape_list (population of time-averaged meshes) to 3D NumPy array
-        avg_meshes_np = np.array([ np.array(pp.vertices) for pp in avg_shape_list ])
+        avg_meshes_np = np.array([ np.array(pp.vertices) for pp in avg_shape_list ]).astype('float32')
         
         # convert time_seq_list (population of moving meshes) to NumPy 4D array
-        moving_meshes_np = np.array([ np.array([ np.array(mesh_t.vertices) for mesh_t in subj ]) for subj in time_seq_list ])
+        moving_meshes_np = np.array([ np.array([ np.array(mesh_t.vertices) for mesh_t in subj ]) for subj in time_seq_list ]).astype('float32')
         
         self.template = sphere        
         self.time_avg_meshes = avg_meshes_np
