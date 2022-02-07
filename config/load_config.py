@@ -21,12 +21,12 @@ def sanity_check(config):
 
     pol_deg_dim = len(config.network_architecture.convolution.parameters.polynomial_degree)
     downsampling_factors_dim = len(config.network_architecture.pooling.parameters.downsampling_factors)
-    n_channels_dim = len(config.network_architecture.convolution.parameters.channels)
+    n_channels_dim = len(config.network_architecture.convolution.channels)
 
     if not ((pol_deg_dim == downsampling_factors_dim) and (pol_deg_dim == n_channels_dim)):       
        raise ValueError(
           f"Dimensions of polynomial degrees, downsampling factors and number of channels should match \
-          (but are {pol_deg_dim}, {downsampling_factors_dim} and {n_channels_dim}."
+          (but are {pol_deg_dim}, {downsampling_factors_dim} and {n_channels_dim}.)"
        )
 
 
@@ -46,8 +46,8 @@ def load_config(yaml_config_file, args):
     config.network_architecture.pooling.parameters.downsampling_factors = \
     [int(x) for x in config.network_architecture.pooling.parameters.downsampling_factors.split()]
     
-    config.network_architecture.convolution.parameters.channels = \
-    [int(x) for x in config.network_architecture.convolution.parameters.channels.split()]
+    config.network_architecture.convolution.channels = \
+    [int(x) for x in config.network_architecture.convolution.channels.split()]
   
     sanity_check(config)
 
