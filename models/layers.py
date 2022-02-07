@@ -49,7 +49,7 @@ class ChebConv_Coma(ChebConv):
 
     def forward(self, x, edge_index, norm, edge_weight=None):
         # Tx_i are Chebyshev polynomials of x, which are computed recursively
-        Tx_0 = x # Tx_0 is the identity, i.e. Tx_0(x) == x
+        Tx_0 = x.float() # Tx_0 is the identity, i.e. Tx_0(x) == x
 
         #TOFIX: This is a workaround to make my code work with a newer version of PyTorch (1.10),
         #since the weight attribute seems to be absent in this version.
@@ -61,12 +61,12 @@ class ChebConv_Coma(ChebConv):
               self.weight.append(next(itertools.islice(self.parameters(), i, None)).t())
             except:
               pass
-
+        
         out = torch.matmul(Tx_0, self.weight[0])
 
         # if self.weight.size(0) > 1:
         if len(self.weight) > 1:
-            Tx_1 = self.propagate(edge_index, x=x, norm=norm) # propagate amounts to operator composition
+            Tx_1 = self.propagate(edge_index, x=Tx_0, norm=norm) # propagate amounts to operator composition
             out = out + torch.matmul(Tx_1, self.weight[1])
 
         # for k in range(2, self.weight.size(0)):

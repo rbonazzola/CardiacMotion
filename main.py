@@ -35,7 +35,7 @@ def get_matrices(config, dm, cache=True, from_cached=True):
             template_mesh, config.network_architecture.pooling.parameters.downsampling_factors,
           )
           n_nodes = [len(M[i].v) for i in range(len(M))]
-          A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
+          A_t, D_t, U_t = ([scipy_to_torch_sparse(x).float() for x in X] for X in (A, D, U))
           if cache:
             os.makedirs(os.path.dirname(cached_file), exist_ok=True)
             with open(cached_file, "wb") as ff:
@@ -64,7 +64,7 @@ def get_coma_args(config, dm):
         "mode": "testing",
     }
 
-    matrices = get_matrices(config, dm)
+    matrices = get_matrices(config, dm, from_cached=False)
     coma_args.update(matrices)
     return coma_args
 
