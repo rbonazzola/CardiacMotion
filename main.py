@@ -1,26 +1,8 @@
-import sys, os
-import yaml
-import logging
 import pickle as pkl
-import utils.VTKHelpers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
-from CardiacMesh import Cardiac3DMesh, Cardiac4DMesh, CardiacMeshPopulation
-from models import layers
-
-from pprint import pprint
-from argparse import Namespace
-from subprocess import check_output
-
-import numpy as np
-import torch
-from torch.utils.data import TensorDataset, DataLoader, random_split
 import pytorch_lightning as pl
 
-import ipywidgets as widgets
-from IPython.display import display, HTML
 from IPython import embed
-
 from utils import mesh_operations
 from utils.helpers import *
 from models.model import Coma4D
@@ -29,26 +11,35 @@ from models.coma_ml_module import CoMA
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
 
+from psbody.mesh import Mesh
 from config.load_config import load_config
 
-from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
+from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 
-def get_matrices(config):
 
-    M, A, D, U = mesh_operations.generate_transform_matrices(
-        Cardiac3DMesh(config.network_architecture.template_mesh),
-        config.network_architecture.pooling.parameters.downsampling_factors,
-    )
+def get_matrices(config, dm, cache=True, from_cached=True):
 
-    n_nodes = [len(M[i].v) for i in range(len(M))]
-    A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
-    
+    mesh_popu = dm.train_dataset.dataset.mesh_popu
+    if cache:
+      embed()
+      matrices_hash = hash((mesh_popu._object_hash, tuple(config.network_architecture.pooling.parameters.downsampling_factors))) % 1000000
+      cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
 
-    if config.network_architecture.cached_matrices is not None:
-        A_t, D_t, U_t, n_nodes = pkl.load(
-            open(config.network_architeture.cached_matrices, "rb")
-        )
+      if from_cached and os.path.exists(cached_file):
+          A_t, D_t, U_t, n_nodes = pkl.load(
+              open(config.network_architeture.cached_matrices, "rb")
+          )
+      else:
+          template_mesh = Mesh(mesh_popu.template.vertices, mesh_popu.template.faces)
+          M, A, D, U = mesh_operations.generate_transform_matrices(
+            template_mesh, config.network_architecture.pooling.parameters.downsampling_factors,
+          )
+          n_nodes = [len(M[i].v) for i in range(len(M))]
+          A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
+          os.makedirs(os.path.dirname(cached_file), exist_ok=True)
+          with open(cached_file, "wb") as ff:
+              pkl.dump((A_t, D_t, U_t, n_nodes), ff)
 
     return {
         "downsample_matrices": D_t,
@@ -58,47 +49,36 @@ def get_matrices(config):
     }
 
 
-def get_coma_args(config):
+def get_coma_args(config, dm):
 
     net = config.network_architecture
-    convs = net.convolution.parameters
+
+    convs = net.convolution
     coma_args = {
         "num_features": net.n_features,
         "n_layers": len(convs.channels),  # REDUNDANT
         "num_conv_filters": convs.channels,
-        "polygon_order": convs.polynomial_degree,
+        "polygon_order": convs.parameters.polynomial_degree,
         "latent_dim": net.latent_dim,
         "is_variational": config.loss.regularization_loss.weight != 0,
         "mode": "testing",
     }
-    
-    matrices = get_matrices(config)
+
+    matrices = get_matrices(config, dm)
     coma_args.update(matrices)
     return coma_args
 
 
 def get_datamodule(config):
 
-    with open(config.dataset.cached_file, "rb") as ff:
-        data = pkl.load(ff)
+    #with open(config.dataset.cached_file, "rb") as ff:
+    #    data = pkl.load(ff)
 
     # TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS
     if config.dataset.data_type.startswith("cardiac"):
-        dm = CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.optimizer.batch_size)
+        return CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.batch_size)
     elif config.dataset.data_type.startswith("synthetic"):
-        dm = SyntheticMeshesDM()
-    return dm
-
-
-# optimizers_menu = {
-#   "adam": torch.optim.Adam(coma.parameters(), lr=lr, betas=(0.5,0.99), weight_decay=weight_decay),
-#   "sgd": torch.optim.SGD(coma.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
-# }
-#
-# losses_menu = {
-#   "l1": {"name": "L1", "function": F.l1_loss},
-#   "mse": {"name": "MSE", "function": F.mse_loss}
-# }
+        return SyntheticMeshesDM(batch_size=config.batch_size, params=config.dataset.parameters.__dict__)
 
 
 def print_auto_logged_info(r):
@@ -116,10 +96,13 @@ def get_dm_model_trainer(config):
 
     # LOAD DATA
     dm = get_datamodule(config)
+    dm.setup()
 
-    # INIT MODEL    
-    coma_args = get_coma_args(config)
+    # Initialize PyTorch model
+    coma_args = get_coma_args(config, dm)
     coma4D = Coma4D(**coma_args)
+
+    # Initialize PyTorch Lightning module
     model = CoMA(coma4D, config)
 
     # train
@@ -146,17 +129,19 @@ def get_mlflow_parameters(config):
 
 def main(config):
 
-    dm, model, trainer = get_dm_model_trainer(config)    
-    
+    dm, model, trainer = get_dm_model_trainer(config)
+
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         with mlflow.start_run() as run:
             for k, v in get_mlflow_parameters(config).items():
               mlflow.log_param(k, v)
             trainer.fit(model, datamodule=dm)
+            result = trainer.test()
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
+        result = trainer.test()
 
 
 if __name__ == "__main__":
@@ -173,21 +158,21 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-c", "--conf", 
-        help="path of config file", 
+        "-c", "--conf",
+        help="path of config file",
         default="config/config_test.yaml"
     )
 
     parser.add_argument(
         "--w_kl",
         help="Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
-        type=float, 
+        type=float,
         default=None
     )
 
     parser.add_argument(
         "--latent_dim",
-        help="Dimension of the latent space. If provided will overwrite the batch size from the configuration file.", 
+        help="Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
         type=int,
         default=None
     )
