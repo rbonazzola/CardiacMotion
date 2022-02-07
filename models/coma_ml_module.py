@@ -68,7 +68,7 @@ class CoMA(pl.LightningModule):
         )  # .reshape(-1, self.model.filters[0]))
         train_loss = recon_loss + self.w_kl * kld_loss
 
-        loss_dict = {"training_kld_loss": kld_loss, "training_recon_loss": recon_loss, "training_loss": train_loss}
+        loss_dict = {"training_kld_loss": kld_loss, "training_recon_loss": recon_loss, "loss": train_loss}
 
         # https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#log-dict
         self.log_dict(loss_dict)
