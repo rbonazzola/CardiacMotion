@@ -3,6 +3,10 @@ import torch
 import torch.nn.functional as F
 # from IPython import embed # uncomment for debugging
 
+losses_menu = {
+  "l1": F.l1_loss,
+  "mse": F.mse_loss
+}
 
 class CoMA(pl.LightningModule):
     """
@@ -17,8 +21,10 @@ class CoMA(pl.LightningModule):
         self.params = params
 
         self.w_kl = self.params.loss.regularization_loss.weight
+
         # TOFIX: decide it from parameters
-        self.rec_loss_function = F.mse_loss        
+
+        self.rec_loss_function = losses_menu[params.loss.reconstruction.type.lower()]
         
 
     def on_fit_start(self):
@@ -149,5 +155,3 @@ class CoMA(pl.LightningModule):
         parameters = vars(self.params.optimizer.parameters)
         optimizer = algorithm(self.model.parameters(), **parameters)
         return optimizer
-
-    
