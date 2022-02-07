@@ -36,8 +36,9 @@ def get_matrices(config, dm, cache=True, from_cached=True):
           )
           n_nodes = [len(M[i].v) for i in range(len(M))]
           A_t, D_t, U_t = ([scipy_to_torch_sparse(x) for x in X] for X in (A, D, U))
-          os.makedirs(os.path.dirname(cached_file), exist_ok=True)
-          with open(cached_file, "wb") as ff:
+          if cache:
+            os.makedirs(os.path.dirname(cached_file), exist_ok=True)
+            with open(cached_file, "wb") as ff:
               pkl.dump((A_t, D_t, U_t, n_nodes), ff)
 
     return {
