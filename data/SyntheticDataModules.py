@@ -4,23 +4,27 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 import pytorch_lightning as pl
 import pickle as pkl
+from SyntheticMeshPopulation import SyntheticMeshPopulation
 
 class SyntheticMeshesDataset(Dataset):
     
-    def  __init__(self, pkl_file="data/cached/synthetic_population.pkl"):
-                
-        mesh_popu = pkl.load(open(pkl_file, "rb"))
-        self.avg_meshes = torch.Tensor(mesh_popu["time_avg_mesh"])
-        self.meshes = torch.Tensor(mesh_popu["moving_mesh"])
-        self.coefficients = mesh_popu["coefficients"]
-        self.template_mesh = mesh_popu["template_mesh"]
-        self.params = mesh_popu["params"]
+    '''
+
+    '''
+
+    def  __init__(self, **params):        
+
+        self.mesh_popu = SyntheticMeshPopulation(
+            N, T, l_max, freq_max,
+            amplitude_static_max, amplitude_dynamic_max,
+            mesh_resolution, random_seed
+        )
 
     def __getitem__(self, index):
-        return self.meshes[index]
+        return self.moving_meshes.meshes[index]
         
     def __len__(self):
-        return len(self.meshes)
+        return len(self.moving_meshes.meshes)
         
     
 #TODO: determine whether this new class is necessary
@@ -32,7 +36,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
     '''
     
     def __init__(self, 
-        pkl_file: Union[None, str] ="data/cached/synthetic_population.pkl", 
+        **params, 
         # mesh_population: Union[Mapping, CardiacMeshPopulation, None] = None, 
         batch_size: int = 32,
         split_lengths: Union[None, List[int]]=None,
@@ -49,8 +53,8 @@ class SyntheticMeshesDM(pl.LightningDataModule):
                              The previous argument takes precedence over this if both are provided.                             
         '''
         
-        super().__init__()
-        self.pkl_file = pkl_file
+        super().__init__()                
+        
         self.batch_size = batch_size        
         self.split_lengths = split_lengths
 
@@ -63,7 +67,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None):
 
-        popu = SyntheticMeshesDataset(self.pkl_file)
+        popu = SyntheticMeshesDataset(**params)
 
         if self.split_lengths is None:
             train_len = int(self.split_fractions[0] * len(popu))
