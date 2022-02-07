@@ -137,7 +137,7 @@ def main(config):
             for k, v in get_mlflow_parameters(config).items():
               mlflow.log_param(k, v)
             trainer.fit(model, datamodule=dm)
-            result = trainer.test()
+            result = trainer.test(datamodule=dm)
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
