@@ -20,7 +20,7 @@ class CoMA(pl.LightningModule):
         self.model = model
         self.params = params
 
-        self.w_kl = self.params.loss.regularization_loss.weight
+        self.w_kl = self.params.loss.regularization.weight
 
         # TOFIX: decide it from parameters
 

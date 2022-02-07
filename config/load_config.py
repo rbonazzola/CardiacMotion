@@ -1,5 +1,6 @@
 import yaml
 from argparse import Namespace
+from IPython import embed
 
 def recursive_namespace(dd):
     '''
@@ -52,7 +53,7 @@ def load_config(yaml_config_file, args):
     sanity_check(config)
 
     if args.w_kl is not None:
-        config.regularization_loss.weight = args.w_kl
+        config.loss.regularization.weight = args.w_kl
 
     if args.latent_dim is not None:
         config.network_architecture.latent_dim = args.latent_dim

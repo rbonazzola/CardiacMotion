@@ -60,7 +60,7 @@ def get_coma_args(config, dm):
         "num_conv_filters": convs.channels,
         "polygon_order": convs.parameters.polynomial_degree,
         "latent_dim": net.latent_dim,
-        "is_variational": config.loss.regularization_loss.weight != 0,
+        "is_variational": config.loss.regularization.weight != 0,
         "mode": "testing",
     }
 
@@ -117,7 +117,7 @@ def get_mlflow_parameters(config):
 
     mlflow_parameters = {
       "platform": check_output(["hostname"]).strip().decode(),
-      "w_kl": config.loss.regularization_loss.weight,
+      "w_kl": config.loss.regularization.weight,
       "latent_dim": config.network_architecture.latent_dim,
       "convolution_type": config.network_architecture.convolution.type,
       "n_channels": config.network_architecture.convolution.channels,

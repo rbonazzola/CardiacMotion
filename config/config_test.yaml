@@ -48,7 +48,7 @@ loss: {
     type: "MSE",
     weight: 1
   },
-  regularization_loss: {
+  regularization: {
     type: "KL",
     weight: 1
   }
