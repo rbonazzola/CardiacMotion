@@ -127,10 +127,21 @@ def get_mlflow_parameters(config):
 def main(config):
 
     dm, model, trainer = get_dm_model_trainer(config)
-
+        
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
-        with mlflow.start_run() as run:
+        
+        config.mlflow.experiment_name = config.mlflow.experiment_name if config.mlflow.experiment_name is not None else "default"        
+        mlf_logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri="file:./mlruns")        
+        trainer = pl.Trainer(gpus=1, callbacks=[EarlyStopping(monitor="loss", mode="min")], max_epochs=2, logger=mlf_logger)        
+        
+        #try:
+        #  exp_id = mlflow.create_experiment(config.mlflow.experiment_name)
+        #except:
+          # If the experiment already exists, we can just retrieve its ID
+        #  exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
+        
+        with mlflow.start_run(run_id=mlf_logger.run_id, exp_id=exp_id, run_name=config.mlflow.run_name) as run:
             for k, v in get_mlflow_parameters(config).items():
               mlflow.log_param(k, v)
             trainer.fit(model, datamodule=dm)
