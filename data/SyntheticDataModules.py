@@ -6,18 +6,35 @@ import pytorch_lightning as pl
 import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
+def mse(s1, s2):
+
+
 class SyntheticMeshesDataset(Dataset):
     
     '''
-
+      PyTorch dataset representing a population of synthetic 3D moving meshes
     '''
 
     def  __init__(self, params):
 
-        self.mesh_popu = SyntheticMeshPopulation(**params)
+        self.mesh_popu = SyntheticMeshPopulation(**params)                
 
     def __getitem__(self, index):
-        return self.mesh_popu.moving_meshes[index]
+        
+        ''' 
+        return:
+          the set of moving meshes for an individual, 
+          the time-averaged mesh, 
+          the MSE of the moving meshes with respect to the time-averaged mesh,
+          the MSE of the moving meshes with respect to the reference mesh (a unit sphere)
+        '''
+
+        moving_meshes = self.mesh_popu.moving_meshes[index]
+        time_avg_mesh = self.mesh_popu.time_avg_meshes[index]
+        dev_from_tmp_avg = [ mse(moving_meshes[j], time_avg_mesh) for j, _ in enumerate(moving_meshes) ]
+        dev_from_sphere = [ mse(moving_meshes[j], self.mesh_popu.template.vertices) for j, _ in enumerate(moving_meshes) ]
+        
+        return moving_meshes, time_avg_mesh, dev_from_tmp_avg, dev_from_sphere
         
     def __len__(self):
         return len(self.mesh_popu.moving_meshes)

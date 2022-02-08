@@ -55,17 +55,18 @@ class CoMA(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         # data, ids = batch
-        data = batch
+        moving_meshes, _, _, _ = batch
 
         if self.model._is_variational:
-            (mu, log_var), out = self(batch)
+            (mu, log_var), out = self(moving_meshes)
             kld_loss = -0.5 * torch.mean(
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
             )
 
         recon_loss = self.rec_loss_function(
-            out, data
+            out, moving_meshes
         )  # .reshape(-1, self.model.filters[0]))
+
         train_loss = recon_loss + self.w_kl * kld_loss
 
         loss_dict = {"training_kld_loss": kld_loss, "training_recon_loss": recon_loss, "loss": train_loss}
@@ -98,21 +99,46 @@ class CoMA(pl.LightningModule):
     def on_validation_epoch_start(self):
         self.model.set_mode("training")
 
-    def validation_step(self, batch, batch_idx):
+    def _shared_eval_step(self, batch, batch_idx):
 
-        # data, ids = batch
-        data = batch
+        '''
+        The validation and testing steps are similar, only the names of the logged quantities differ.
+        The common part is performed here.
+        '''
+
+        moving_meshes, avg_mesh, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
 
         if self.model._is_variational:
-            (mu, log_var), out = self(batch)
+            (mu, log_var), out = self(moving_meshes)
             kld_loss = -0.5 * torch.mean(
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
-            )
+            )        
+            recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
+            loss = recon_loss + self.w_kl * kld_loss
+        else:
+            kld_loss = None
+            recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
+            loss = recon_loss
+        
+        rec_ratio_to_time_mean = recon_loss / mse_mesh_to_tmp_mean
+        rec_ratio_to_pop_mean = recon_loss / mse_mesh_to_pop_mean
 
-        recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
-        train_loss = recon_loss + self.w_kl * kld_loss
+        return loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean
 
-        loss_dict = {"val_kld_loss": kld_loss, "val_recon_loss": recon_loss, "val_loss": train_loss}
+
+    def validation_step(self, batch, batch_idx):
+
+        
+        loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
+        
+        loss_dict = {
+          "val_kld_loss": kld_loss, 
+          "val_recon_loss": recon_loss, 
+          "val_loss": train_loss, 
+          "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean, 
+          "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
+        }
+
         self.log_dict(loss_dict)
         return loss_dict
 
@@ -124,29 +150,32 @@ class CoMA(pl.LightningModule):
         avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in outputs]).mean()
+        rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in outputs]).mean()
 
-        self.log_dict(
-            {"val_kld_loss": avg_kld_loss, "val_recon_loss": avg_recon_loss, "val_loss": avg_loss},
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
+        self.log_dict({
+            "val_kld_loss": avg_kld_loss, 
+            "val_recon_loss": avg_recon_loss, 
+            "val_loss": avg_loss,
+            "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
+            "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
+          },
+          on_epoch=True,
+          prog_bar=True,
+          logger=True
         )
 
     def test_step(self, batch, batch_idx):
-        
-        # data, ids = batch
-        data = batch
+                
+        loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
 
-        if self.model._is_variational:
-            (mu, log_var), out = self(batch)
-            kld_loss = -0.5 * torch.mean(
-                torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
-            )
-
-        recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
-        train_loss = recon_loss + self.w_kl * kld_loss
-
-        loss_dict = {"test_kld_loss": kld_loss, "test_recon_loss": recon_loss, "test_loss": train_loss}
+        loss_dict = {
+          "test_kld_loss": kld_loss, 
+          "test_recon_loss": recon_loss, 
+          "test_loss": train_loss,
+          "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
+          "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
+        }
         self.log_dict(loss_dict)
         return loss_dict
 
@@ -157,10 +186,18 @@ class CoMA(pl.LightningModule):
         avg_kld_loss = torch.stack([x["test_kld_loss"] for x in outputs]).mean()
         avg_recon_loss = torch.stack([x["test_recon_loss"] for x in outputs]).mean()
         avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
+        rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in outputs]).mean()
+        rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in outputs]).mean()
         
-        self.log_dict(
-            {"test_kld_loss": avg_kld_loss, "test_recon_loss": avg_recon_loss, "test_loss": avg_loss}
-        )
+        loss_dict = {
+          "test_kld_loss": kld_loss, 
+          "test_recon_loss": recon_loss, 
+          "test_loss": train_loss,
+          "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
+          "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
+        }
+
+        self.log_dict(loss_dict)            
 
 
     # TODO: Select optimizer from menu (dict)
