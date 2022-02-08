@@ -113,11 +113,11 @@ class CoMA(pl.LightningModule):
             kld_loss = -0.5 * torch.mean(
                 torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0
             )        
-            recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
+            recon_loss = self.rec_loss_function(out, moving_meshes)  # .reshape(-1, self.model.filters[0]))
             loss = recon_loss + self.w_kl * kld_loss
         else:
             kld_loss = None
-            recon_loss = self.rec_loss_function(out, data)  # .reshape(-1, self.model.filters[0]))
+            recon_loss = self.rec_loss_function(out, moving_meshes)  # .reshape(-1, self.model.filters[0]))
             loss = recon_loss
         
         rec_ratio_to_time_mean = recon_loss / mse_mesh_to_tmp_mean
@@ -134,7 +134,7 @@ class CoMA(pl.LightningModule):
         loss_dict = {
           "val_kld_loss": kld_loss, 
           "val_recon_loss": recon_loss, 
-          "val_loss": train_loss, 
+          "val_loss": loss, 
           "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean, 
           "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
         }
@@ -172,7 +172,7 @@ class CoMA(pl.LightningModule):
         loss_dict = {
           "test_kld_loss": kld_loss, 
           "test_recon_loss": recon_loss, 
-          "test_loss": train_loss,
+          "test_loss": loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
         }
@@ -190,9 +190,9 @@ class CoMA(pl.LightningModule):
         rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in outputs]).mean()
         
         loss_dict = {
-          "test_kld_loss": kld_loss, 
-          "test_recon_loss": recon_loss, 
-          "test_loss": train_loss,
+          "test_kld_loss": avg_kld_loss, 
+          "test_recon_loss": avg_recon_loss, 
+          "test_loss": avg_loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean
         }

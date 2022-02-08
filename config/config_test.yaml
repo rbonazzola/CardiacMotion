@@ -62,3 +62,7 @@ optimizer: {
     weight_decay: 0.0005
   }
 }
+mlflow: {
+  run_name: null,
+  experiment_name: "Synthetic data"
+ }

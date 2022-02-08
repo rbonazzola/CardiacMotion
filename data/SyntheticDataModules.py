@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import TensorDataset, DataLoader, random_split
@@ -7,7 +8,7 @@ import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 def mse(s1, s2):
-
+    return ((s1-s2)**2).mean()
 
 class SyntheticMeshesDataset(Dataset):
     
@@ -31,8 +32,8 @@ class SyntheticMeshesDataset(Dataset):
 
         moving_meshes = self.mesh_popu.moving_meshes[index]
         time_avg_mesh = self.mesh_popu.time_avg_meshes[index]
-        dev_from_tmp_avg = [ mse(moving_meshes[j], time_avg_mesh) for j, _ in enumerate(moving_meshes) ]
-        dev_from_sphere = [ mse(moving_meshes[j], self.mesh_popu.template.vertices) for j, _ in enumerate(moving_meshes) ]
+        dev_from_tmp_avg = np.array([ mse(moving_meshes[j], time_avg_mesh) for j, _ in enumerate(moving_meshes) ])
+        dev_from_sphere = np.array([ mse(moving_meshes[j], np.array(self.mesh_popu.template.vertices)) for j, _ in enumerate(moving_meshes) ])
         
         return moving_meshes, time_avg_mesh, dev_from_tmp_avg, dev_from_sphere
         
