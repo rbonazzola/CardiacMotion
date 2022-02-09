@@ -1,3 +1,4 @@
+import os
 import yaml
 from argparse import Namespace
 from IPython import embed
@@ -23,19 +24,25 @@ def unfold_config(token, no_unfolding_for=[]):
       no_unfolding_for: a list of dict keys for which the yaml shouldn't be unfolded, and instead kept as a path
     Returns: A dictionary with all the yaml files replaces by their content.
     '''
-    repo_rootdir = get_repo_rootdir()
-    yaml_dir = os.path.join(repo_rootdir, "config_files")
+
+    #
     if is_yaml_file(token):
         #TODO: COMMENT AND DOCUMENT THIS!!!
-        try:
-            token = yaml.safe_load(open(token))
+        yaml_file_base = token
+        try:            
+            yaml_dir = get_repo_rootdir()
+            yaml_file = os.path.join(yaml_dir, yaml_file_base)
+            token = yaml.safe_load(open(yaml_file))
         except FileNotFoundError:
-            kk = open(os.path.join(yaml_dir, token))
-            token = yaml.safe_load(kk)
+            yaml_dir = os.path.join(get_repo_rootdir(), "config")
+            yaml_file = os.path.join(yaml_dir, yaml_file_base)
+            token = yaml.safe_load(open(yaml_file))
+
     if isinstance(token, dict):
         for k, v in token.items():
             if k not in no_unfolding_for:
                 token[k] = unfold_config(v, no_unfolding_for)
+
     return token
 
 
@@ -72,10 +79,10 @@ def sanity_check(config):
 def load_config(yaml_config_file, args):
     
     
-    with open(yaml_config_file) as config:
-        config = yaml.safe_load(config)    
+    # config = yaml.safe_load(config)    
+    config = unfold_config(yaml_config_file)    
         # I am using a namespace instead of a dictionary mainly because it enables auto-completion
-        config = recursive_namespace(config)
+    config = recursive_namespace(config)
     
     
     # The following parameters are meant to be lists of numbers, so they are parsed here from their string representation in the YAML file.
