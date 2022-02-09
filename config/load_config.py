@@ -2,6 +2,43 @@ import yaml
 from argparse import Namespace
 from IPython import embed
 
+
+def is_yaml_file(x):
+    if isinstance(x, str):
+        return x.endswith("yaml") or x.endswith("yml")
+    return False
+
+
+def get_repo_rootdir():
+    import shlex
+    from subprocess import check_output
+    repo_rootdir = check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
+    return repo_rootdir
+
+
+def unfold_config(token, no_unfolding_for=[]):
+    '''
+    Parameters: 
+      token: a recursive structure composed of a path to a yaml file or a dictionary composed of such structures.
+      no_unfolding_for: a list of dict keys for which the yaml shouldn't be unfolded, and instead kept as a path
+    Returns: A dictionary with all the yaml files replaces by their content.
+    '''
+    repo_rootdir = get_repo_rootdir()
+    yaml_dir = os.path.join(repo_rootdir, "config_files")
+    if is_yaml_file(token):
+        #TODO: COMMENT AND DOCUMENT THIS!!!
+        try:
+            token = yaml.safe_load(open(token))
+        except FileNotFoundError:
+            kk = open(os.path.join(yaml_dir, token))
+            token = yaml.safe_load(kk)
+    if isinstance(token, dict):
+        for k, v in token.items():
+            if k not in no_unfolding_for:
+                token[k] = unfold_config(v, no_unfolding_for)
+    return token
+
+
 def recursive_namespace(dd):
     '''
     Converts a (possibly nested) dictionary into a namespace.
@@ -13,6 +50,7 @@ def recursive_namespace(dd):
             dd[d] = recursive_namespace(dd[d])
             has_any_dicts = True
     return Namespace(**dd)
+
 
 def sanity_check(config):
     

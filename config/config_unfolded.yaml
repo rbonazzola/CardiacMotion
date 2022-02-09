@@ -1,0 +1,23 @@
+seed: null
+
+dataset: {
+  data_type: "synthetic",
+  parameters: "dataset/default_synthetic.yaml",
+  preprocessing: null
+}
+
+batch_size: 32
+sample_sizes: {
+  training: 0.6,
+  validation: 0.2,
+  testing: 0.2
+}
+
+network_architecture: "network_architecture/default.yaml"
+loss: "loss/default.yaml"
+optimizer: "optimizer/default_adam.yaml"
+
+mlflow: {
+  run_name: null,
+  experiment_name: "Synthetic data"
+ }

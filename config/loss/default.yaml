@@ -1,0 +1,10 @@
+{
+  reconstruction: {
+    type: "MSE",
+    weight: 1
+  },
+  regularization: {
+    type: "KL",
+    weight: 1
+  }
+}
