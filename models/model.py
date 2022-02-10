@@ -20,9 +20,26 @@ class Coma(torch.nn.Module):
           adjacency_matrices, 
           n_nodes,
           mode="testing",
+          phase_input=True,
           z_aggr_function=lambda x: torch.Tensor.mean(x, axis=1)
         ):
-        
+        '''
+          params:
+          - n_layers (int): number of layers in the encoder (= number the layers in the decoder)
+          - num_features (int): number of features in the input tensor (usually 3, one per spatial coordinate)
+          - num_conv_filters (list<int>): number of channels (=number of convolutional filters).
+          - polygon_order (list<int>): degree of the Chebyshev polynomial used as a filter.:
+          - latent_dim (int): dimension of the latent representation vector.
+          - is_variational (boolean): whether the VAE is variational (i.e. weight of the K-L divergence != 0)
+          - downsample_matrices (list<matrix>): binary matrices representing the mapping between the vertices in one graph, and the vertices in the following layer of the encoder.
+          - upsample_matrices (list<matrix>): idem previous, but for the decoder.
+          - adjacency_matrices (list<matrix>: list of adjacency matrices of the graphs in each layer.
+          - n_nodes: number of nodes in the input mesh.
+          - mode (str in {"testing", "training"}: determines whether the VAE should sample the latent vector or not.
+          - phase_input (boolean): whether the input should be multiplied by exp(2*pi*i*t/N) where i is the imaginary unit, t/N is the phase as a fraction of the whole cycle.
+          - z_aggr_function: PyTorch function used to perform the aggregation of the latent vectors produced for each time point.
+        '''
+ 
         super(Coma, self).__init__()
 
         self.n_nodes = n_nodes
