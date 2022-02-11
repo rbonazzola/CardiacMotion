@@ -73,6 +73,7 @@ class Coma(torch.nn.Module):
         # TODO: decide activation functions to parameters
 
         self.reset_parameters()
+    
 
     def _build_encoder(self):
         # Chebyshev convolutions (encoder)
@@ -133,7 +134,7 @@ class Coma(torch.nn.Module):
         time_frames = x.shape[1]
         
         x = x.reshape(batch_size, time_frames, -1, self.filters[0])
-        
+                
         if self._is_variational and self._mode == "training":            
             self.mu, self.log_var = self.encoder(x)
             z = self._sample(self.mu, self.log_var)
@@ -199,12 +200,38 @@ class Coma(torch.nn.Module):
 class Coma4D(Coma):
 
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.dec_lin = torch.nn.Linear(2*self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
+    # def __init__(self, **kwargs):
+        # super().__init__(**kwargs)
+        # self.dec_lin = torch.nn.Linear(2*self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
+
+
+    def phase_tensor(self, x): 
+
+        '''
+        params:
+            x: a real-valued Tensor of dimensions [batch_size, n_phases, ...]
+
+        return:
+            complex-valued Tensor of the same dimension as the input
+        '''
+
+        # x.shape[1] is the number of phases
+
+        phased_x = x
+        n_timeframes = x.shape[1]
+ 
+        for t in range(n_timeframes):
+            phase = 2 * np.pi * t / n_timeframes * np.ones(x[:, i, ...])
+            # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
+            phased_x[:, i, ...] = torch.polar(x[:, i, ...], phase)
+
+        return phased_x
 
 
     def encoder(self, x):
+
+        if self.phase_input:
+            x = phase_tensor(x)
 
         for i in range(self.n_layers):
             x = self.cheb_enc[i](x, self.A_edge_index[i], self.A_norm[i])
@@ -235,8 +262,8 @@ class Coma4D(Coma):
 
     def decoder(self, z):
     
-        z_t = self.phase_embedding(z)
-        # z_t = self.phase_embedding(z)
+        z_t = self.phase_tensor(z)
+        
         s_out = []
 
         for t in range(self.n_timeframes):
