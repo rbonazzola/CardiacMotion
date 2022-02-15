@@ -1,3 +1,4 @@
+import itertools
 import torch
 from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
@@ -49,11 +50,10 @@ class ChebConv_Coma(ChebConv):
 
     def forward(self, x, edge_index, norm, edge_weight=None):
         # Tx_i are Chebyshev polynomials of x, which are computed recursively
-        Tx_0 = x.float() # Tx_0 is the identity, i.e. Tx_0(x) == x
+        Tx_0 = x # Tx_0 is the identity, i.e. Tx_0(x) == x
 
         #TOFIX: This is a workaround to make my code work with a newer version of PyTorch (1.10),
         #since the weight attribute seems to be absent in this version.
-        import itertools
         self.weight = []
         #TODO: change this range
         for i in range(1, 7):            
