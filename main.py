@@ -115,7 +115,7 @@ def get_dm_model_trainer(config, trainer_args):
 
     # trainer
     trainer = pl.Trainer(
-        callbacks=[EarlyStopping(monitor="val_loss", mode="min")],
+        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
         gpus=trainer_args.gpus,
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
@@ -198,6 +198,13 @@ if __name__ == "__main__":
       ("--latent_dim",): { 
           "help": "Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
           "type": int, "default": None }, 
+      ("--no_phase_input",): { 
+          "help":"If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
+          "default": None, 
+          "action": "store_true" }, 
+      ("--learning_rate", "-lr",): { 
+          "help":"Learning rate",
+          "type": float},
       ("--batch_size",): { 
           "help":"Training batch size. If provided will overwrite the batch size from the configuration file.",
           "type": int, "default": None }, 
