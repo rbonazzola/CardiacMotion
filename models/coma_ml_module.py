@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-# from IPython import embed # uncomment for debugging
+from IPython import embed # uncomment for debugging
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -119,9 +119,11 @@ class CoMA(pl.LightningModule):
             kld_loss = None
             recon_loss = self.rec_loss_function(out, moving_meshes)  # .reshape(-1, self.model.filters[0]))
             loss = recon_loss
+      
+        mse_per_subj_per_time = ((out-moving_meshes)**2).sum(axis=-1).mean(axis=-1)
         
-        rec_ratio_to_time_mean = recon_loss / mse_mesh_to_tmp_mean
-        rec_ratio_to_pop_mean = recon_loss / mse_mesh_to_pop_mean
+        rec_ratio_to_time_mean = mse_per_subj_per_time / mse_mesh_to_tmp_mean
+        rec_ratio_to_pop_mean = mse_per_subj_per_time / mse_mesh_to_pop_mean
 
         return loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean
 
