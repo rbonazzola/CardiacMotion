@@ -19,6 +19,9 @@ from data.SyntheticDataModules import SyntheticMeshesDM
 from pytorch_lightning.loggers import MLFlowLogger
 
 import argparse
+from argparse import Namespace
+
+import pprint
 
 def get_matrices(config, dm, cache=True, from_cached=True):
 
@@ -103,6 +106,8 @@ def get_dm_model_trainer(config, trainer_args):
 
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
+    
+    embed()
     coma4D = Coma4D(**coma_args)
 
     # Initialize PyTorch Lightning module
@@ -172,6 +177,13 @@ if __name__ == "__main__":
             if attr in config.keys() and value is not None:
                 config[attr] = value
 
+    def to_dict(token): 
+        if isinstance(token, Namespace):
+          namespace_as_dict = token.__dict__
+          token = {k: to_dict(v) for k, v in namespace_as_dict.items()}
+        return token
+           
+
     parser = argparse.ArgumentParser(
         description="Pytorch Trainer for Convolutional Mesh Autoencoders"
     )
@@ -182,26 +194,26 @@ if __name__ == "__main__":
           "default": "config/config_test.yaml" }, 
       ("--w_kl",): { 
           "help":"Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
-          "type": int, "default": None }, 
+          "type": float, "default": None }, 
       ("--latent_dim",): { 
           "help": "Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
-          "type": float, "default": None }, 
+          "type": int, "default": None }, 
       ("--batch_size",): { 
           "help":"Training batch size. If provided will overwrite the batch size from the configuration file.",
           "type": int, "default": None }, 
       ("--disable_mlflow_logging",): { 
           "help": "Set this flag if you don't want to log the run's data to MLflow.",
-          "default": False, "action": "store_true", }
-    #    ("--dry-run",): {
-    #    default=False,
-    #    action="store_true",
-    #    help="Dry run: just prints out the parameters of the execution but performs no training.",
-    #  }
+          "default": False, "action": "store_true", },
+      ("--dry-run",): {
+          "dest": "dry_run",
+          "default": False,
+          "action": "store_true",
+          "help": "Dry run: just prints out the parameters of the execution but performs no training.",
+       }
     }
     
     #to avoid a little bit of boilerplate
     for k, v in CLI_args.items():
-        print(k,v)
         parser.add_argument(*k, **v)
 
     # add arguments specific to the 
@@ -219,4 +231,9 @@ if __name__ == "__main__":
     config = load_config(args.conf, args)
     config.log_to_mlflow = not args.disable_mlflow_logging
     
+    if args.dry_run:
+        pp = pprint.PrettyPrinter(indent=4, compact=True)
+        pp.pprint(to_dict(config))
+        exit()
+
     main(config, trainer_args)
