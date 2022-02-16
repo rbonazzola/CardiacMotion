@@ -18,6 +18,8 @@ from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 from pytorch_lightning.loggers import MLFlowLogger
 
+import argparse
+
 def get_matrices(config, dm, cache=True, from_cached=True):
 
     mesh_popu = dm.train_dataset.dataset.mesh_popu
@@ -165,8 +167,6 @@ def main(config, trainer_args):
 
 if __name__ == "__main__":
 
-    import argparse
-
     def overwrite_config_items(config, args):
         for attr, value in args.__dict__.items():
             if attr in config.keys() and value is not None:
@@ -176,49 +176,36 @@ if __name__ == "__main__":
         description="Pytorch Trainer for Convolutional Mesh Autoencoders"
     )
 
-    parser.add_argument(
-        "-c", "--conf",
-        help="path of config file",
-        default="config/config_test.yaml"
-    )
-
-    parser.add_argument(
-        "--w_kl",
-        help="Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
-        type=float,
-        default=None
-    )
-
-    parser.add_argument(
-        "--latent_dim",
-        help="Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
-        type=int,
-        default=None
-    )
-
-    parser.add_argument(
-        "--batch_size",
-        help="Training batch size. If provided will overwrite the batch size from the configuration file.",
-        type=int,
-        default=None
-    )
-
-    parser.add_argument(
-        "--disable_mlflow_logging",
-        default=False,
-        action="store_true",
-        help="Set this flag if you don't want to log the run's data to MLflow.",
-    )
-    
-    parser = pl.Trainer.add_argparse_args(parser)   
-
-    #parser.add_argument(
-    #    "--dry-run",
-    #    dest="dry_run",
+    CLI_args = {
+      ("-c", "--conf",):  { 
+          "help": "path of config file", 
+          "default": "config/config_test.yaml" }, 
+      ("--w_kl",): { 
+          "help":"Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
+          "type": int, "default": None }, 
+      ("--latent_dim",): { 
+          "help": "Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
+          "type": float, "default": None }, 
+      ("--batch_size",): { 
+          "help":"Training batch size. If provided will overwrite the batch size from the configuration file.",
+          "type": int, "default": None }, 
+      ("--disable_mlflow_logging",): { 
+          "help": "Set this flag if you don't want to log the run's data to MLflow.",
+          "default": False, "action": "store_true", }
+    #    ("--dry-run",): {
     #    default=False,
     #    action="store_true",
     #    help="Dry run: just prints out the parameters of the execution but performs no training.",
-    #)
+    #  }
+    }
+    
+    #to avoid a little bit of boilerplate
+    for k, v in CLI_args.items():
+        print(k,v)
+        parser.add_argument(*k, **v)
+
+    # add arguments specific to the 
+    parser = pl.Trainer.add_argparse_args(parser)   
 
     args = parser.parse_args()
 
