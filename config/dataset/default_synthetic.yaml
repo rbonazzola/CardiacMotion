@@ -10,5 +10,7 @@
     "mesh_resolution": 12,
     "random_seed": 101
   },
-  preprocessing: null
- }
+  preprocessing: {
+    "center_around_mean": true
+  }
+}
