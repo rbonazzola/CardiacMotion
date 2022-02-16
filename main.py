@@ -75,7 +75,11 @@ def get_datamodule(config):
     if config.dataset.data_type.startswith("cardiac"):
         return CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.batch_size)
     elif config.dataset.data_type.startswith("synthetic"):
-        return SyntheticMeshesDM(batch_size=config.batch_size, params=config.dataset.parameters.__dict__)
+        return SyntheticMeshesDM(
+            batch_size=config.batch_size, 
+            data_params=config.dataset.parameters.__dict__, 
+            preprocessing_params=config.dataset.preprocessing
+        )
 
 
 def print_auto_logged_info(r):
@@ -89,7 +93,7 @@ def print_auto_logged_info(r):
     print("tags: {}".format(tags))
 
 
-def get_dm_model_trainer(config):
+def get_dm_model_trainer(config, trainer_args):
 
     # LOAD DATA
     dm = get_datamodule(config)
@@ -102,10 +106,13 @@ def get_dm_model_trainer(config):
     # Initialize PyTorch Lightning module
     model = CoMA(coma4D, config)
 
-    # train
+    # trainer
     trainer = pl.Trainer(
-      gpus=1,
-      callbacks=[EarlyStopping(monitor="val_loss", mode="min")]
+        callbacks=[EarlyStopping(monitor="val_loss", mode="min")],
+        gpus=trainer_args.gpus,
+        min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
+        auto_scale_batch_size=trainer_args.auto_scale_batch_size,
+        logger=trainer_args.logger
     )
 
     return dm, model, trainer
@@ -118,38 +125,42 @@ def get_mlflow_parameters(config):
       "latent_dim": config.network_architecture.latent_dim,
       "convolution_type": config.network_architecture.convolution.type,
       "n_channels": config.network_architecture.convolution.channels,
-      "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors
+      "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors,
+      "center_around_mean": config.dataset.preprocessing.center_around_mean,
+      "phase_input": config.network_architecture.phase_input
     }
 
     return mlflow_parameters
 
 
-def main(config):
+def main(config, trainer_args):
 
-    dm, model, trainer = get_dm_model_trainer(config)
+    #
+    if config.log_to_mlflow:
+        if config.mlflow.experiment_name is None:
+            config.mlflow.experiment_name = "default"
+        trainer_args.logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri="file:./mlruns")
+    else:
+        trainer_args.logger = None
+
+    dm, model, trainer = get_dm_model_trainer(config, trainer_args)
         
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
-        
-        config.mlflow.experiment_name = config.mlflow.experiment_name if config.mlflow.experiment_name is not None else "default"        
-        mlf_logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri="file:./mlruns")        
-        trainer = pl.Trainer(gpus=1, callbacks=[EarlyStopping(monitor="loss", mode="min")], max_epochs=2, logger=mlf_logger)        
-        
         try:
-          exp_id = mlflow.create_experiment(config.mlflow.experiment_name)
+            exp_id = mlflow.create_experiment(config.mlflow.experiment_name)
         except:
           # If the experiment already exists, we can just retrieve its ID
-          exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
+            exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
         
-        with mlflow.start_run(run_id=mlf_logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
-            for k, v in get_mlflow_parameters(config).items():
-              mlflow.log_param(k, v)
+        with mlflow.start_run(run_id=trainer.logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
+            mlflow.log_params(get_mlflow_parameters(config))
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
             print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
-        result = trainer.test()
+        result = trainer.test(datamodule=dm)
 
 
 if __name__ == "__main__":
@@ -198,6 +209,8 @@ if __name__ == "__main__":
         action="store_true",
         help="Set this flag if you don't want to log the run's data to MLflow.",
     )
+    
+    parser = pl.Trainer.add_argparse_args(parser)   
 
     #parser.add_argument(
     #    "--dry-run",
@@ -213,6 +226,10 @@ if __name__ == "__main__":
     if not os.path.exists(args.conf):
         logger.error("Config not found" + args.conf)
 
+    #TOFIX: args contains other arguments that do not correspond to the trainer
+    trainer_args = args
+
     config = load_config(args.conf, args)
     config.log_to_mlflow = not args.disable_mlflow_logging
-    main(config)
+    
+    main(config, trainer_args)
