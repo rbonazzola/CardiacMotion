@@ -24,6 +24,7 @@ sample_sizes: {
 batch_size: 32
 
 network_architecture: {  
+  phase_input: true
   latent_dim: 8,
   n_features: 3,
   convolution: { 

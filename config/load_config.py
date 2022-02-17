@@ -105,5 +105,11 @@ def load_config(yaml_config_file, args):
 
     if args.batch_size is not None:
         config.optimizer.batch_size = args.batch_size
+    
+    if args.no_phase_input is not None:
+        config.network_architecture.phase_input = not args.no_phase_input
+    
+    if args.learning_rate is not None:
+        config.optimizer.parameters.lr = args.learning_rate
 
     return config

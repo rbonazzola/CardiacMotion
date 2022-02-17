@@ -1,4 +1,8 @@
-.idea
-.ipynb_checkpoints
-__pycache__
-*pyc
+*.idea
+*.ipynb_checkpoints/
+*__pycache__/
+*.pyc
+*.pkl
+mlruns/
+lightning_logs/
+*.sif

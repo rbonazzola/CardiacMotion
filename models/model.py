@@ -45,6 +45,10 @@ class Coma(torch.nn.Module):
         self.n_nodes = n_nodes
         self.n_layers = n_layers
         self.filters = num_conv_filters
+
+#        if phase_input:
+ #         self.filters.insert(0, 2*num_features)
+  #      else:
         self.filters.insert(0, num_features)
 
         self.K = polygon_order
@@ -66,23 +70,27 @@ class Coma(torch.nn.Module):
         if self._is_variational:            
             self.enc_lin_var = torch.nn.Linear(self._n_features_before_z, self.z)
 
-        self.dec_lin = torch.nn.Linear(self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
-
+        if phase_input:
+          self.dec_lin = torch.nn.Linear(2 * self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
+        else:
+          self.dec_lin = torch.nn.Linear(self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
+     
         self.z_aggr_function = z_aggr_function
 
         # TODO: decide activation functions to parameters
 
         self.reset_parameters()
-    
+        self.phase_input = phase_input
 
     def _build_encoder(self):
         # Chebyshev convolutions (encoder)
-        cheb_enc = torch.nn.ModuleList([
+        cheb_enc = torch.nn.ModuleList([ ChebConv_Coma(   2*self.filters[0],  self.filters[1],  self.K[0])])
+        cheb_enc.extend([
             ChebConv_Coma(
                 self.filters[i],
                 self.filters[i+1],
                 self.K[i]
-            ) for i in range(len(self.filters)-1)
+            ) for i in range(1, len(self.filters)-1)
         ])
         return cheb_enc
 
@@ -217,21 +225,22 @@ class Coma4D(Coma):
 
         # x.shape[1] is the number of phases
 
-        phased_x = x
+        phased_x = x.type(torch.complex64)
         n_timeframes = x.shape[1]
  
         for t in range(n_timeframes):
-            phase = 2 * np.pi * t / n_timeframes * np.ones(x[:, i, ...])
+            phase = 2 * np.pi * t / n_timeframes * np.ones((x[:, t, ...]).shape)
+            phase = torch.Tensor(phase)
+            phase = phase.to(x.device)
             # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
-            phased_x[:, i, ...] = torch.polar(x[:, i, ...], phase)
+            phased_x[:, t, ...] = torch.polar(x[:, t, ...], phase)
 
+        # concatenate sin and cosine along last dimension
+        phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
         return phased_x
 
 
     def encoder(self, x):
-
-        if self.phase_input:
-            x = phase_tensor(x)
 
         for i in range(self.n_layers):
             x = self.cheb_enc[i](x, self.A_edge_index[i], self.A_norm[i])
@@ -268,7 +277,7 @@ class Coma4D(Coma):
 
         for t in range(self.n_timeframes):
            
-            x = self.dec_lin(z_t[:,t,:])
+            x = self.dec_lin(z_t)
             x = F.relu(x)        
 
             # x = x.reshape(-1, self.cheb_dec[0].in_channels)
@@ -292,8 +301,11 @@ class Coma4D(Coma):
 
         batch_size = x.shape[0]
         time_frames = x.shape[1]
+        
+        if self.phase_input:
+            x = self.phase_tensor(x)
                 
-        x = x.reshape(batch_size, time_frames, -1, self.filters[0])
+        x = x.reshape(batch_size, time_frames, -1, 2*self.filters[0])
         
         if self._is_variational and self._mode == "training":            
             self.mu, self.log_var = self.encoder(x)            
