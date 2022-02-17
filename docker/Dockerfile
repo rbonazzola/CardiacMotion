@@ -66,6 +66,7 @@ RUN conda install pyg -c pyg -c conda-forge
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 
+
 # I am including this in case it's needed, but at the moment I'm using the host's Nvidia drivers.
 # RUN apt-get update 
 # RUN sudo apt-get install && sudo apt-get install -y module-init-tools
@@ -74,10 +75,26 @@ RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${C
 # RUN sudo bash NVIDIA-Linux-x86_64-440.118.02.run -s
 
 # Install vtk and others
-RUN pip install vtk meshio nvgpu
+RUN pip install vtk meshio vedo trimesh pyvista
+
+RUN pip install nvgpu
 
 # Install psbody-mesh
 WORKDIR /home/user
 RUN git clone https://github.com/MPI-IS/mesh.git
 WORKDIR mesh
 RUN make all
+
+# Set up read-only SSH keys for personal GitHub repositories and clone them
+RUN mkdir /home/user/.ssh
+COPY --chown=user ssh_keys/* /home/user/.ssh/
+WORKDIR /app
+RUN touch /home/user/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /home/user/.ssh/known_hosts
+
+RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/cardiac_motion; git clone git@github.com:rbonazzola/CardiacMotionRL.git'
+WORKDIR /app/CardiacMotionRL
+RUN git checkout development
+RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/vtk_helpers; git submodule update --init --recursive'
+WORKDIR /app/CardiacMotionRL/utils/VTKHelpers
+RUN git checkout development
