@@ -11,13 +11,19 @@ RUN apt-get update &&  apt-get install -y \
     bzip2 \
     libx11-6 \
     wget \
+    zip \
  && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get update
 RUN apt-get install -y gcc
+RUN apt-get install -y tmux
 RUN apt-get install -y make
 RUN apt-get install -y --reinstall build-essential
 RUN apt-get install -y libboost-dev
+
+RUN apt-get update -y && \
+    apt-get install -y build-essential libfuse-dev libcurl4-openssl-dev libxml2-dev pkg-config libssl-dev mime-support automake libtool wget tar git unzip
+RUN apt-get install lsb-release -y  && apt-get install zip -y && apt-get install vim -y
 
 RUN apt-get update
 RUN apt-get install ffmpeg libsm6 libxext6  -y
@@ -85,16 +91,51 @@ RUN git clone https://github.com/MPI-IS/mesh.git
 WORKDIR mesh
 RUN make all
 
-# Set up read-only SSH keys for personal GitHub repositories and clone them
+# Set up read-only SSH keys for personal GitHub repositories
 RUN mkdir /home/user/.ssh
 COPY --chown=user ssh_keys/* /home/user/.ssh/
 WORKDIR /app
 RUN touch /home/user/.ssh/known_hosts
 RUN ssh-keyscan github.com >> /home/user/.ssh/known_hosts
 
+# Clone personal repositories
 RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/cardiac_motion; git clone git@github.com:rbonazzola/CardiacMotionRL.git'
 WORKDIR /app/CardiacMotionRL
 RUN git checkout development
 RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/vtk_helpers; git submodule update --init --recursive'
 WORKDIR /app/CardiacMotionRL/utils/VTKHelpers
 RUN git checkout development
+WORKDIR /home/user
+
+# RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip
+# RUN ./aws/install -i /home/user/aws-cli -b /home/user/bin
+
+RUN pip install s3cmd
+COPY --chown=user aws/.s3cfg.gpg /home/user
+
+RUN conda install -c conda-forge awscli
+
+USER root
+## Install S3 Fuse
+RUN rm -rf /usr/src/s3fs-fuse
+RUN git clone https://github.com/s3fs-fuse/s3fs-fuse/ /usr/src/s3fs-fuse
+WORKDIR /usr/src/s3fs-fuse 
+RUN ./autogen.sh && ./configure && make && make install
+RUN apt-get install fuse
+
+## Create folder
+USER user
+RUN mkdir $HOME/s3
+
+## Set the directory where you want to mount your s3 bucket
+ENV S3_MOUNT_DIRECTORY=$HOME/s3
+
+## Replace with your s3 bucket name
+ENV S3_BUCKET_NAME=users-rbonazzola
+
+## Entry Point
+ADD --chown=user start-script.sh $HOME/start-script.sh
+RUN chmod 755 $HOME/start-script.sh 
+COPY --chown=user aws/.passwd-s3fs.gpg $HOME
+WORKDIR $HOME
+CMD ["./start-script.sh"]
