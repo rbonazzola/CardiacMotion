@@ -36,7 +36,7 @@ class Coma(torch.nn.Module):
           - adjacency_matrices (list<matrix>: list of adjacency matrices of the graphs in each layer.
           - n_nodes: number of nodes in the input mesh.
           - mode (str in {"testing", "training"}: determines whether the VAE should sample the latent vector or not.
-          - phase_input (boolean): whether the input should be multiplied by exp(2*pi*i*t/N) where i is the imaginary unit, t/N is the phase as a fraction of the whole cycle.
+          - phase_input (boolean): whether the input should be multiplied by exp(2*pi*i*t/N) where i is sqrt(-1), t/N is the phase as a fraction of the whole cycle.
           - z_aggr_function: PyTorch function used to perform the aggregation of the latent vectors produced for each time point.
         '''
  
@@ -46,9 +46,9 @@ class Coma(torch.nn.Module):
         self.n_layers = n_layers
         self.filters = num_conv_filters
 
-#        if phase_input:
- #         self.filters.insert(0, 2*num_features)
-  #      else:
+#       if phase_input:
+#         self.filters.insert(0, 2*num_features)
+#       else:
         self.filters.insert(0, num_features)
 
         self.K = polygon_order
@@ -62,7 +62,8 @@ class Coma(torch.nn.Module):
         self._is_variational = is_variational
         
         self.A_edge_index, self.A_norm = self._build_adj_matrix()
-        self.cheb_enc, self.cheb_dec = self._build_encoder(), self._build_decoder()                
+        self.cheb_enc = self._build_encoder(self.filters, self.K)
+        self.cheb_dec = self._build_decoder(self.filters, self.K) 
         self.pool = Pool()
         
         # Fully connected layers connecting the last pooling layer and the latent space layer.
@@ -82,26 +83,26 @@ class Coma(torch.nn.Module):
         self.reset_parameters()
         self.phase_input = phase_input
 
-    def _build_encoder(self):
+    def _build_encoder(self, n_filters, K):
         # Chebyshev convolutions (encoder)
-        cheb_enc = torch.nn.ModuleList([ ChebConv_Coma(   2*self.filters[0],  self.filters[1],  self.K[0])])
+        cheb_enc = torch.nn.ModuleList([ ChebConv_Coma(   2*n_filters[0],  n_filters[1],  K[0])])
         cheb_enc.extend([
             ChebConv_Coma(
-                self.filters[i],
-                self.filters[i+1],
-                self.K[i]
-            ) for i in range(1, len(self.filters)-1)
+                n_filters[i],
+                n_filters[i+1],
+                K[i]
+            ) for i in range(1, len(n_filters)-1)
         ])
         return cheb_enc
 
-    def _build_decoder(self):
+    def _build_decoder(self, n_filters, K):
         # Chebyshev deconvolutions (decoder)
         cheb_dec = torch.nn.ModuleList([
             ChebConv_Coma(
-                self.filters[-i-1],
-                self.filters[-i-2],
-                self.K[i]
-            ) for i in range(len(self.filters)-1)
+                n_filters[-i-1],
+                n_filters[-i-2],
+                K[i]
+            ) for i in range(len(n_filters)-1)
         ])
         cheb_dec[-1].bias = None  # No bias for last convolution layer
         return cheb_dec

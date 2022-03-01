@@ -8,11 +8,13 @@ from utils.helpers import *
 from models.model import Coma4D
 from models.coma_ml_module import CoMA
 
+
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
 
 from psbody.mesh import Mesh
 from config.load_config import load_config
+
 
 from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
@@ -23,14 +25,23 @@ from argparse import Namespace
 
 import pprint
 
-def get_matrices(config, dm, cache=True, from_cached=True):
+def get_coma_matrices(config, dm, cache=True, from_cached=True):
+    '''
+
+    :param config: configuration Namespace, with a list called "network_architecture.pooling.parameters.downsampling_factors" as attribute.
+    :param dm: a PyTorch Lightning datamodule, with attributes train_dataset.dataset.mesh_popu and train_dataset.dataset.mesh_popu.template
+    :param cache: if True, will cache the matrices in a pkl file, unless this file already exists.
+    :param from_cached: if True, will try to fetch the matrices from a previously cached pkl file.
+    :return: a dictionary with keys "downsample_matrices", "upsample_matrices", "adjacency_matrices" and "n_nodes",
+    where the first three elements are lists of matrices and the last is a list of integers.
+    '''
 
     mesh_popu = dm.train_dataset.dataset.mesh_popu
     matrices_hash = hash((mesh_popu._object_hash, tuple(config.network_architecture.pooling.parameters.downsampling_factors))) % 1000000
     cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
     
     if from_cached and os.path.exists(cached_file):
-        A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
+          A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
     else:
           template_mesh = Mesh(mesh_popu.template.vertices, mesh_popu.template.faces)
           M, A, D, U = mesh_operations.generate_transform_matrices(
@@ -58,15 +69,18 @@ def get_coma_args(config, dm):
     convs = net.convolution
     coma_args = {
         "num_features": net.n_features,
-        "n_layers": len(convs.channels),  # REDUNDANT
-        "num_conv_filters": convs.channels,
+        "n_layers": len(convs.channels_enc),  # REDUNDANT
+        "num_conv_filters_enc": convs.channels_enc,
+        "num_conv_filters_dec_c": convs.channels_dec_c,
+        "num_conv_filters_dec_s": convs.channels_dec_s,
         "polygon_order": convs.parameters.polynomial_degree,
-        "latent_dim": net.latent_dim,
+        "latent_dim_content": net.latent_dim_c,
+        "latent_dim_style": net.latent_dim_s,
         "is_variational": config.loss.regularization.weight != 0,
         "mode": "testing",
     }
 
-    matrices = get_matrices(config, dm, from_cached=False)
+    matrices = get_coma_matrices(config, dm, from_cached=False)
     coma_args.update(matrices)
     return coma_args
 
@@ -106,8 +120,7 @@ def get_dm_model_trainer(config, trainer_args):
 
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
-    
-    embed()
+
     coma4D = Coma4D(**coma_args)
 
     # Initialize PyTorch Lightning module
@@ -127,14 +140,15 @@ def get_dm_model_trainer(config, trainer_args):
 def get_mlflow_parameters(config):
 
     mlflow_parameters = {
-      "platform": check_output(["hostname"]).strip().decode(),
-      "w_kl": config.loss.regularization.weight,
-      "latent_dim": config.network_architecture.latent_dim,
-      "convolution_type": config.network_architecture.convolution.type,
-      "n_channels": config.network_architecture.convolution.channels,
-      "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors,
-      "center_around_mean": config.dataset.preprocessing.center_around_mean,
-      "phase_input": config.network_architecture.phase_input
+        "platform": check_output(["hostname"]).strip().decode(),
+        "w_kl": config.loss.regularization.weight,
+        "latent_dim_s": config.network_architecture.latent_dim_s,
+        "latent_dim_c": config.network_architecture.latent_dim_c,
+        "convolution_type": config.network_architecture.convolution.type,
+        "n_channels": config.network_architecture.convolution.channels,
+        "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors,
+        "center_around_mean": config.dataset.preprocessing.center_around_mean,
+        "phase_input": config.network_architecture.phase_input
     }
 
     return mlflow_parameters
@@ -159,7 +173,7 @@ def main(config, trainer_args):
         except:
           # If the experiment already exists, we can just retrieve its ID
             exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
-        
+
         with mlflow.start_run(run_id=trainer.logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
             mlflow.log_params(get_mlflow_parameters(config))
             trainer.fit(model, datamodule=dm)
@@ -184,9 +198,7 @@ if __name__ == "__main__":
         return token
            
 
-    parser = argparse.ArgumentParser(
-        description="Pytorch Trainer for Convolutional Mesh Autoencoders"
-    )
+    parser = argparse.ArgumentParser(description="Pytorch Trainer for Convolutional Mesh Autoencoders")
 
     CLI_args = {
       ("-c", "--conf",):  { 

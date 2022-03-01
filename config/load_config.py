@@ -67,7 +67,11 @@ def sanity_check(config):
 
     pol_deg_dim = len(config.network_architecture.convolution.parameters.polynomial_degree)
     downsampling_factors_dim = len(config.network_architecture.pooling.parameters.downsampling_factors)
-    n_channels_dim = len(config.network_architecture.convolution.channels)
+    
+    try:
+      n_channels_dim = len(config.network_architecture.convolution.channels)
+    except:
+      n_channels_dim = len(config.network_architecture.convolution.channels_enc)
 
     if not ((pol_deg_dim == downsampling_factors_dim) and (pol_deg_dim == n_channels_dim)):       
        raise ValueError(
@@ -76,7 +80,7 @@ def sanity_check(config):
        )
 
 
-def load_config(yaml_config_file, args):
+def load_config(yaml_config_file, args=None):
     
     
     # config = yaml.safe_load(config)    
@@ -92,24 +96,41 @@ def load_config(yaml_config_file, args):
     config.network_architecture.pooling.parameters.downsampling_factors = \
     [int(x) for x in config.network_architecture.pooling.parameters.downsampling_factors.split()]
     
-    config.network_architecture.convolution.channels = \
-    [int(x) for x in config.network_architecture.convolution.channels.split()]
+
+
+    if hasattr(config.network_architecture.convolution, "channels"):
+      config.network_architecture.convolution.channels = \
+      [int(x) for x in config.network_architecture.convolution.channels.split()]
+
+    if hasattr(config.network_architecture.convolution, "channels_enc"):
+      config.network_architecture.convolution.channels_enc = \
+      [int(x) for x in config.network_architecture.convolution.channels_enc.split()]
   
+    if hasattr(config.network_architecture.convolution, "channels_dec_c"):
+      config.network_architecture.convolution.channels_dec_c = \
+      [int(x) for x in config.network_architecture.convolution.channels_dec_c.split()]
+
+    if hasattr(config.network_architecture.convolution, "channels_dec_s"):
+      config.network_architecture.convolution.channels_dec_s = \
+      [int(x) for x in config.network_architecture.convolution.channels_dec_s.split()]
+
     sanity_check(config)
 
-    if args.w_kl is not None:
-        config.loss.regularization.weight = args.w_kl
+    if args is not None:
 
-    if args.latent_dim is not None:
-        config.network_architecture.latent_dim = args.latent_dim
-
-    if args.batch_size is not None:
-        config.optimizer.batch_size = args.batch_size
+        if args.w_kl is not None:
+            config.loss.regularization.weight = args.w_kl
     
-    if args.no_phase_input is not None:
-        config.network_architecture.phase_input = not args.no_phase_input
+        if args.latent_dim is not None:
+            config.network_architecture.latent_dim = args.latent_dim
     
-    if args.learning_rate is not None:
-        config.optimizer.parameters.lr = args.learning_rate
+        if args.batch_size is not None:
+            config.optimizer.batch_size = args.batch_size
+        
+        if args.no_phase_input is not None:
+            config.network_architecture.phase_input = not args.no_phase_input
+        
+        if args.learning_rate is not None:
+            config.optimizer.parameters.lr = args.learning_rate
 
     return config

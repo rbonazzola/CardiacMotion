@@ -1,0 +1,12 @@
+seed: null
+batch_size: 128
+dataset: "dataset/default_synthetic.yaml"
+sample_sizes: { training: 0.6, validation: 0.2, testing: 0.2 }
+network_architecture: "network_architecture/default_c_and_s.yaml"
+loss: "loss/default.yaml"
+optimizer: "optimizer/default_adam.yaml"
+
+mlflow: {
+  run_name: null,
+  experiment_name: "Synthetic data"
+ }
