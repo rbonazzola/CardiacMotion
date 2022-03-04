@@ -30,8 +30,9 @@ class CoMA(pl.LightningModule):
 
     def get_rec_loss(self):
 
+        self.w_s = self.params.loss.reconstruction_s.weight
         self.w_kl = self.params.loss.regularization.weight
-        return losses_menu[self.params.loss.reconstruction.type.lower()]
+        return losses_menu[self.params.loss.reconstruction_c.type.lower()]
 
     # def get_loss(self):
     #     return
@@ -149,11 +150,14 @@ class CoMA(pl.LightningModule):
         rec_ratio_to_time_mean = mse_per_subj_per_time / mse_mesh_to_tmp_mean
         rec_ratio_to_pop_mean = mse_per_subj_per_time / mse_mesh_to_pop_mean
 
-        return loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean
+        return loss,\
+               recon_loss, recon_loss_c, recon_loss_s,\
+               kld_loss_c, kld_loss_s, kld_loss,\
+               rec_ratio_to_time_mean, rec_ratio_to_pop_mean
 
     def validation_step(self, batch, batch_idx):
 
-        loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
+        loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
         
         loss_dict = {
           "val_kld_loss": kld_loss, 
@@ -174,6 +178,8 @@ class CoMA(pl.LightningModule):
 
         avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
+        avg_recon_loss_c = torch.stack([x["val_recon_loss_c"] for x in outputs]).mean()
+        avg_recon_loss_s = torch.stack([x["val_recon_loss_s"] for x in outputs]).mean()
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in outputs]).mean()
@@ -194,7 +200,7 @@ class CoMA(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
                 
-        loss, recon_loss, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
+        loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean = self._shared_eval_step(batch, batch_idx)
 
         loss_dict = {
           "test_kld_loss": kld_loss, 
@@ -212,6 +218,8 @@ class CoMA(pl.LightningModule):
 
         avg_kld_loss = torch.stack([x["test_kld_loss"] for x in outputs]).mean()
         avg_recon_loss = torch.stack([x["test_recon_loss"] for x in outputs]).mean()
+        avg_recon_loss_c = torch.stack([x["test_recon_loss_c"] for x in outputs]).mean()
+        avg_recon_loss_s = torch.stack([x["test_recon_loss_s"] for x in outputs]).mean()
         avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in outputs]).mean()

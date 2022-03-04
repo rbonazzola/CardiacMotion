@@ -6,6 +6,7 @@ from IPython import embed
 from utils import mesh_operations
 from utils.helpers import *
 from models.model import Coma4D
+from models.model_c_and_s import Coma4D_C_and_S
 from models.coma_ml_module import CoMA
 
 
@@ -121,7 +122,7 @@ def get_dm_model_trainer(config, trainer_args):
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
 
-    coma4D = Coma4D(**coma_args)
+    coma4D = Coma4D_C_and_S(**coma_args)
 
     # Initialize PyTorch Lightning module
     model = CoMA(coma4D, config)
@@ -145,7 +146,9 @@ def get_mlflow_parameters(config):
         "latent_dim_s": config.network_architecture.latent_dim_s,
         "latent_dim_c": config.network_architecture.latent_dim_c,
         "convolution_type": config.network_architecture.convolution.type,
-        "n_channels": config.network_architecture.convolution.channels,
+        "n_channels_enc": config.network_architecture.convolution.channels_enc,
+        "n_channels_dec_c": config.network_architecture.convolution.channels_dec_c,
+        "n_channels_dec_s": config.network_architecture.convolution.channels_dec_s,
         "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors,
         "center_around_mean": config.dataset.preprocessing.center_around_mean,
         "phase_input": config.network_architecture.phase_input
@@ -157,6 +160,8 @@ def get_mlflow_parameters(config):
 def main(config, trainer_args):
 
     #
+
+    config.mlflow.tracking_uri
     if config.log_to_mlflow:
         if config.mlflow.experiment_name is None:
             config.mlflow.experiment_name = "default"
@@ -207,8 +212,11 @@ if __name__ == "__main__":
       ("--w_kl",): { 
           "help":"Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
           "type": float, "default": None }, 
-      ("--latent_dim",): { 
-          "help": "Weight of the Kullback-Leibler regularization term. If provided will overwrite the batch size from the configuration file.",
+      ("--latent_dim_c",): { 
+          "help": "Dimension of the content part of the latent space", 
+          "type": int, "default": None }, 
+      ("--latent_dim_s",): { 
+          "help": "Dimension of the style part of the latent space", 
           "type": int, "default": None }, 
       ("--no_phase_input",): { 
           "help":"If this flag is set, the phase embedding is not applied to the input mesh coordinates.",

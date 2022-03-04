@@ -64,7 +64,7 @@ class Coma4D_C_and_S(torch.nn.Module):
         #if self.filters_s is None:
         #    self.filters_s = self.filters_enc
 
-        self.cheb_enc_c = self._build_encoder(self.filters_enc, self.K)
+        self.cheb_enc = self._build_encoder(self.filters_enc, self.K)
         self.cheb_dec_c = self._build_decoder(self.filters_dec_c, self.K)
         self.cheb_dec_s = self._build_decoder(self.filters_dec_s, self.K)
         self.pool = Pool()
@@ -179,14 +179,20 @@ class Coma4D_C_and_S(torch.nn.Module):
 
         # Iterate through time points
         for i in range(x.shape[1]):
-            mu_c.append(self.enc_lin_mu_c(x[:,i,:]))
-            mu_s.append(self.enc_lin_mu_s(x[:,i,:]))
+            mu = self.enc_lin_mu(x[:,i,:])
+            mu_c.append(mu[:,:self.z_c])
+            mu_s.append(mu[:,self.z_c:])
             
             if self._is_variational and self._mode == "training":
-                log_var_c.append(self.enc_lin_var_c(x[:,i,:]))
-                log_var_s.append(self.enc_lin_var_s(x[:,i,:]))
+                log_var = self.enc_lin_var(x[:,i,:])
+                log_var_c.append(log_var[:,:self.z_c])
+                log_var_s.append(log_var[:,self.z_c:])
         
         mu_c, mu_s = torch.cat(mu_c), torch.cat(mu_s)
+        mu_c = mu_c.reshape(-1, self.n_timeframes, self.z_c)
+        mu_c = self.z_aggr_function(mu_c)
+        mu_s = mu_s.reshape(-1, self.n_timeframes, self.z_s)
+        mu_s = self.z_aggr_function(mu_s)
 
         if self._is_variational and self._mode == "training":
             log_var_c = torch.cat(log_var_c)
@@ -212,7 +218,8 @@ class Coma4D_C_and_S(torch.nn.Module):
             x = F.relu(x)
         x = self.pool(x, self.upsample_matrices[0])
         s_avg = self.cheb_dec_c[-1](x, self.A_edge_index[-1], self.A_norm[-1])
-            
+   
+        return s_avg
         #TODO: comment this
         #x = x.unsqueeze(1)       
 
@@ -224,8 +231,8 @@ class Coma4D_C_and_S(torch.nn.Module):
 
         for t in range(self.n_timeframes):
            
-            z_t = z_s_t[:,:,t]
-            x = self.dec_lin_s(torch.cat(z_c, z_s_t))
+            # z_t = z_s_t[:,:,t]
+            x = self.dec_lin_s(torch.cat([z_c, z_s_t], axis=-1))
             x = F.relu(x)
 
             # x = x.reshape(-1, self.cheb_dec[0].in_channels)
@@ -242,8 +249,12 @@ class Coma4D_C_and_S(torch.nn.Module):
             s_out.append(x)
 
         s_out = torch.cat(s_out, dim=1)
-        return s_avg, s_out
+        return s_out
 
+    def _sample(self, mu, log_var):
+        std = torch.exp(0.5*log_var)
+        eps = torch.randn_like(std)
+        return eps.mul(std).add_(mu) 
 
     def forward(self, x):
 
@@ -253,7 +264,7 @@ class Coma4D_C_and_S(torch.nn.Module):
         if self.phase_input:
             x = self.phase_tensor(x)
                 
-        x = x.reshape(batch_size, time_frames, -1, 2*self.filters[0])
+        x = x.reshape(batch_size, time_frames, -1, 2*self.filters_enc[0])
         
         if self._is_variational and self._mode == "training":            
             
