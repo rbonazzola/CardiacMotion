@@ -211,8 +211,11 @@ if __name__ == "__main__":
           "help": "path of config file", 
           "default": "config/config_test.yaml" }, 
       ("--w_kl",): { 
-          "help":"Dimension of the latent space. If provided will overwrite the batch size from the configuration file.",
-          "type": float, "default": None }, 
+          "help": "weight of KL term",
+          "type": float, "default": None },
+      ("--w_s",): {
+          "help": "weight of \"style\" reconstruction term",
+          "type": float, "default": None},
       ("--latent_dim_c",): { 
           "help": "Dimension of the content part of the latent space", 
           "type": int, "default": None }, 
@@ -244,7 +247,8 @@ if __name__ == "__main__":
           "help": "Dry run: just prints out the parameters of the execution but performs no training.",
        }
     }
-    
+
+
     #to avoid a little bit of boilerplate
     for k, v in CLI_args.items():
         parser.add_argument(*k, **v)

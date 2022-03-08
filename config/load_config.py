@@ -118,6 +118,9 @@ def load_config(yaml_config_file, args=None):
 
     if args is not None:
 
+        if args.w_s is not None:
+            config.loss.reconstruction_s.weight = args.w_s
+
         if args.w_kl is not None:
             config.loss.regularization.weight = args.w_kl
     
