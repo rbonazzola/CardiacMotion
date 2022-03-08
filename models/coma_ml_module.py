@@ -65,18 +65,23 @@ class CoMA(pl.LightningModule):
 
         # data, ids = batch
         moving_meshes, time_avg_mesh, _, _ = batch
+        bottleneck, s_avg, s_t = self(moving_meshes)
+        recon_loss_c = self.rec_loss(s_t, moving_meshes)
+        recon_loss_s = self.rec_loss(s_avg, time_avg_mesh)
+        recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
-            bottleneck, s_avg, s_t = self(moving_meshes)
             self.mu_c, self.log_var_c, self.mu_s, self.log_var_s = bottleneck
             kld_loss_c = self.KL_div(self.mu_c, self.log_var_c)
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
+        else:
+            loss = recon_loss
+            kld_loss = torch.zeros_like(loss)
+            kld_loss_c = torch.zeros_like(loss)
+            kld_loss_s = torch.zeros_like(loss)
 
         kld_loss = kld_loss_c + kld_loss_s
-        recon_loss_c = self.rec_loss(s_t, moving_meshes)
-        recon_loss_s = self.rec_loss(s_avg, time_avg_mesh)
 
-        recon_loss = recon_loss_c + self.w_s * recon_loss_s
         train_loss = recon_loss + self.w_kl * kld_loss
 
         loss_dict = {
@@ -142,8 +147,10 @@ class CoMA(pl.LightningModule):
             kld_loss = kld_loss_c + kld_loss_s
             loss = recon_loss + self.w_kl * kld_loss
         else:
-            kld_loss = None
             loss = recon_loss
+            kld_loss = torch.zeros_like(loss)
+            kld_loss_c = torch.zeros_like(loss)
+            kld_loss_s = torch.zeros_like(loss)
 
         mse_per_subj_per_time = ((s_t-moving_meshes)**2).sum(axis=-1).mean(axis=-1)
         

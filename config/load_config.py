@@ -121,8 +121,11 @@ def load_config(yaml_config_file, args=None):
         if args.w_kl is not None:
             config.loss.regularization.weight = args.w_kl
     
-        if args.latent_dim is not None:
-            config.network_architecture.latent_dim = args.latent_dim
+        if args.latent_dim_c is not None:
+            config.network_architecture.latent_dim_c = args.latent_dim_c
+        
+        if args.latent_dim_s is not None:
+            config.network_architecture.latent_dim_s = args.latent_dim_s
     
         if args.batch_size is not None:
             config.optimizer.batch_size = args.batch_size

@@ -3,7 +3,7 @@
   parameters: {    
     "amplitude_static_max": 0.3,
     "amplitude_dynamic_max": 0.1,
-    "N": 5000,
+    "N": 5120,
     "T": 20,
     "freq_max": 3,
     "l_max": 2,

@@ -133,7 +133,8 @@ def get_dm_model_trainer(config, trainer_args):
         gpus=trainer_args.gpus,
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
-        logger=trainer_args.logger
+        logger=trainer_args.logger,
+        precision=trainer_args.precision
     )
 
     return dm, model, trainer
@@ -161,20 +162,20 @@ def main(config, trainer_args):
 
     #
 
-    config.mlflow.tracking_uri
     if config.log_to_mlflow:
         if config.mlflow.experiment_name is None:
             config.mlflow.experiment_name = "default"
-        trainer_args.logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri="file:./mlruns")
+        trainer_args.logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri=config.mlflow.tracking_uri, artifact_location=config.mlflow.artifact_location)
+        mlflow.set_tracking_uri(config.mlflow.tracking_uri)
     else:
         trainer_args.logger = None
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
-        
+              
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
         try:
-            exp_id = mlflow.create_experiment(config.mlflow.experiment_name)
+            exp_id = mlflow.create_experiment(config.mlflow.experiment_name, artifact_location=config.mlflow.artifact_location)
         except:
           # If the experiment already exists, we can just retrieve its ID
             exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
@@ -183,7 +184,7 @@ def main(config, trainer_args):
             mlflow.log_params(get_mlflow_parameters(config))
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
-            print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
+            # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
         result = trainer.test(datamodule=dm)
@@ -231,7 +232,12 @@ if __name__ == "__main__":
       ("--disable_mlflow_logging",): { 
           "help": "Set this flag if you don't want to log the run's data to MLflow.",
           "default": False, "action": "store_true", },
-      ("--dry-run",): {
+      ("--mlflow_config", ): {
+          "action": "store_true",
+          "help": "YAML configuration file containing information to log model information to MLflow." },
+      ("--mlflow_experiment", ): {
+          "help": "MLflow experiment's name" },
+      ("--dry-run", "--dry_run"): {
           "dest": "dry_run",
           "default": False,
           "action": "store_true",
@@ -259,7 +265,7 @@ if __name__ == "__main__":
     config.log_to_mlflow = not args.disable_mlflow_logging
     
     if args.dry_run:
-        pp = pprint.PrettyPrinter(indent=4, compact=True)
+        pp = pprint.PrettyPrinter(indent=2, compact=True)
         pp.pprint(to_dict(config))
         exit()
 

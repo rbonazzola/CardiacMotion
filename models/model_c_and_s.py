@@ -134,7 +134,7 @@ class Coma4D_C_and_S(torch.nn.Module):
             torch.nn.init.normal_(self.enc_lin_mu.weight, 0, 0.1)
             torch.nn.init.normal_(self.enc_lin_var.weight, 0, 0.1)
         else:
-            torch.nn.init.normal_(self.enc_lin.weight, 0, 0.1)
+            torch.nn.init.normal_(self.enc_lin_mu.weight, 0, 0.1)
         torch.nn.init.normal_(self.dec_lin_c.weight, 0, 0.1)
         torch.nn.init.normal_(self.dec_lin_s.weight, 0, 0.1)
 
@@ -280,9 +280,15 @@ class Coma4D_C_and_S(torch.nn.Module):
                 self.mu_s, self.log_var_s = self.mu_s/1000, self.log_var_s/1000
                 z_s = self._sample(self.mu_s, self.log_var_s)
         else:
-            z_c, z_s = self.encoder(x)
+            self.mu_c, self.mu_s = self.encoder(x)
+            z_c, z_s = self.mu_c, self.mu_s
 
         s_avg = self.decoder_c(z_c)
         s_t = self.decoder_s(z_c, z_s)
 
-        return (self.mu_c, self.log_var_c, self.mu_s, self.log_var_s), s_avg, s_t
+        if self._is_variational and self._mode == "training":
+            return (self.mu_c, self.log_var_c, self.mu_s, self.log_var_s), s_avg, s_t
+        else:
+            return (self.mu_c, None, self.mu_s, None), s_avg, s_t
+
+
