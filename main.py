@@ -134,7 +134,8 @@ def get_dm_model_trainer(config, trainer_args):
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
         logger=trainer_args.logger,
-        precision=trainer_args.precision
+        precision=trainer_args.precision,
+        overfit_batches=args.overfit_batches
     )
 
     return dm, model, trainer
