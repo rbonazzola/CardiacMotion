@@ -73,7 +73,7 @@ RUN conda install pyg -c pyg -c conda-forge
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 # Install vtk and others
-RUN pip install vtk meshio vedo trimesh pyvista
+RUN pip install vtk meshio vedo trimesh pyvista icosphere 
 # Install psbody-mesh
 WORKDIR /home/user
 RUN git clone https://github.com/MPI-IS/mesh.git

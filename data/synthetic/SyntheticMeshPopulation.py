@@ -122,7 +122,9 @@ class SyntheticMeshPopulation(object):
 
     def _generate_population(self):
             
-        sphere = vedo.Sphere(res=self.params.mesh_resolution).to_trimesh()
+        # sphere = vedo.Sphere(res=self.params.mesh_resolution).to_trimesh()
+        sphere = icosphere.icosphere(nu=self.params.mesh_resolution)
+        sphere = trimesh.Trimesh(vertices=sphere[0], faces=sphere[1])
         sphere_coords = self._appendSpherical_np(sphere.vertices)[:,-2:] # Get theta and phi coordinates
 
         Y_lm, f_lmn, g_lmn = cache_base_functions(sphere_coords, self.params.l_max, self.params.freq_max, Nt=self.params.T)
