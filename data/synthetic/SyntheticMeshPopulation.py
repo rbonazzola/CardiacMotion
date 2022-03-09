@@ -10,6 +10,7 @@ import re
 import random
 from argparse import Namespace
 import pickle as pkl
+import icosphere
 
 class SyntheticMeshPopulation(object):
 
