@@ -1,4 +1,5 @@
 import torch
+from torch import nn
 import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
 from IPython import embed
@@ -84,7 +85,8 @@ class Coma4D_C_and_S(torch.nn.Module):
                 self.z_c + 2 * self.z_s,
                 self.filters_dec_s[-1]*self.upsample_matrices[-1].shape[1]
             )
-     
+    
+        self.phase_tensor = PhaseTensor()
         self.z_aggr_function = AggregatorFunction(z_aggr_function)
         self.reset_parameters()
 
@@ -236,7 +238,7 @@ class Coma4D_C_and_S(torch.nn.Module):
         time_frames = x.shape[1]
         
         if self.phase_input:
-            x = PhaseTensor(x)
+            x = self.phase_tensor(x)
                 
         x = x.reshape(batch_size, time_frames, -1, 2*self.filters_enc[0])
         
