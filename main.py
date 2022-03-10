@@ -10,6 +10,7 @@ from models.model import Coma4D
 from models.model_c_and_s import Coma4D_C_and_S
 from models.coma_ml_module import CoMA
 import hiddenlayer as hl
+from torchviz import make_dot
 
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
@@ -176,9 +177,11 @@ def main(config, trainer_args):
         trainer_args.logger = None
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
-    
-    gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
-    embed()
+
+    yhat = model(next(iter(dm.train_dataloader()))[0])
+    make_dot(yhat, params=dict(list(model.named_parameters()))).render("graph_network", format="png")
+    # gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
+    # embed()
 
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
