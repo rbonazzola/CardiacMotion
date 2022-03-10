@@ -1,5 +1,6 @@
 import pickle as pkl
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping 
+from pytorch_lightning.callbacks import RichModelSummary
 import pytorch_lightning as pl
 
 from IPython import embed
@@ -129,13 +130,16 @@ def get_dm_model_trainer(config, trainer_args):
 
     # trainer
     trainer = pl.Trainer(
-        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
+        callbacks=[
+            EarlyStopping(monitor="val_loss", mode="min", patience=3),
+            RichModelSummary(max_depth=-1)            
+        ],
         gpus=trainer_args.gpus,
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
         logger=trainer_args.logger,
         precision=trainer_args.precision,
-        overfit_batches=args.overfit_batches
+        overfit_batches=args.overfit_batches,
     )
 
     return dm, model, trainer
