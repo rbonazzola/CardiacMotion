@@ -66,8 +66,8 @@ class CoMA(pl.LightningModule):
         # data, ids = batch
         moving_meshes, time_avg_mesh, _, _ = batch
         bottleneck, s_avg, s_t = self(moving_meshes)
-        recon_loss_c = self.rec_loss(s_t, moving_meshes)
-        recon_loss_s = self.rec_loss(s_avg, time_avg_mesh)
+        recon_loss_c = self.rec_loss(s_avg, time_avg_mesh)
+        recon_loss_s = self.rec_loss(s_t, moving_meshes)
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
@@ -136,8 +136,8 @@ class CoMA(pl.LightningModule):
         bottleneck, s_avg, s_t = self(moving_meshes)
 
         # content
-        recon_loss_c = self.rec_loss(s_t, moving_meshes)
-        recon_loss_s = self.rec_loss(s_avg, time_avg_mesh)
+        recon_loss_c = self.rec_loss(s_avg, time_avg_mesh)
+        recon_loss_s = self.rec_loss(s_t, moving_meshes)
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
@@ -163,8 +163,8 @@ class CoMA(pl.LightningModule):
                recon_loss, recon_loss_c, recon_loss_s,\
                kld_loss_c, kld_loss_s, kld_loss,\
                rec_ratio_to_time_mean,\
-               rec_ratio_to_pop_mean_c,\
-               rec_ratio_to_pop_mean
+               rec_ratio_to_pop_mean,\
+               rec_ratio_to_pop_mean_c
 
     def validation_step(self, batch, batch_idx):
 
