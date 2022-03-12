@@ -132,7 +132,7 @@ def get_dm_model_trainer(config, trainer_args):
     # trainer
     trainer = pl.Trainer(
         callbacks=[
-            EarlyStopping(monitor="val_loss", mode="min", patience=3),
+            EarlyStopping(monitor="val_loss", mode="min", patience=10),
             RichModelSummary(max_depth=-1)            
         ],
         gpus=trainer_args.gpus,
@@ -178,10 +178,7 @@ def main(config, trainer_args):
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
 
-    yhat = model(next(iter(dm.train_dataloader()))[0])
-    make_dot(yhat, params=dict(list(model.named_parameters()))).render("graph_network", format="png")
     # gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
-    # embed()
 
     if config.log_to_mlflow:
         mlflow.pytorch.autolog()
@@ -192,6 +189,12 @@ def main(config, trainer_args):
             exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
 
         with mlflow.start_run(run_id=trainer.logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
+            
+            if config.log_computational_graph:
+                yhat = model(next(iter(dm.train_dataloader()))[0])
+                make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
+                mlflow.log_figure("comp_graph_network.png")
+
             mlflow.log_params(get_mlflow_parameters(config))
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
@@ -251,6 +254,12 @@ if __name__ == "__main__":
           "help": "YAML configuration file containing information to log model information to MLflow." },
       ("--mlflow_experiment", ): {
           "help": "MLflow experiment's name" },
+      ("--show_config", ): {
+          "action": "store_true",
+          "help": "Display run's configuration" },
+      ("--log_computational_graph", ): {
+          "action": "store_true",
+          "help": "If True, will log the computational graph as an artifact (not fully functional due to limitations of the torchviz library)" },
       ("--dry-run", "--dry_run"): {
           "dest": "dry_run",
           "default": False,
@@ -277,11 +286,13 @@ if __name__ == "__main__":
     trainer_args = args
 
     config = load_config(args.conf, args)
+    config.log_computational_graph = args.log_computational_graph
     config.log_to_mlflow = not args.disable_mlflow_logging
-    
-    if args.dry_run:
+      
+    if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)
         pp.pprint(to_dict(config))
-        exit()
+        if args.dry_run:
+            exit()
 
     main(config, trainer_args)

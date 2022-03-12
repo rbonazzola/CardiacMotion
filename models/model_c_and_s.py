@@ -302,8 +302,8 @@ class PhaseTensor(nn.Module):
             phased_x[:, t, ...] = torch.polar(x[:, t, ...], phase)
 
         # concatenate sin and cosine along last dimension
-        phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
-        return phased_x
+        # phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
+        return torch.cat((x, x), axis=-1)# phased_x
 
     def forward(self, x):
         return self.phase_tensor(x)
