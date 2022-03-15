@@ -163,6 +163,27 @@ def get_mlflow_parameters(config):
 
     return mlflow_parameters
 
+def get_mlflow_dataset_params(config):
+
+    d = config.dataset
+
+    mlflow_dataset_params = {
+         "dataset_type" : d.data_type.: "synthetic",
+         "dataset_max_static_amplitude" : d.parameters.amplitde_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitde_dynamic_max,
+         "dataset_n_timeframes" : d.parameters.T,
+         "dataset_freq_max" : d.parameters.freq_max,
+         "dataset_l_max" : d.parameters.l_max,
+         "dataset_complexity_c": (d.parameters.l_max + 1) ** 2,
+         "dataset_complexity_s": ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max,
+         "dataset_complexity": ((d.parameters.l_max + 1) ** 2) * (d.parameters.freq_max + 1),
+         "dataset_random_seed" : d.parameters.random_seed,
+         "dataset_template": "icosphere", #TODO: add this as parameter in the configuration
+         "dataset_center_around_mean" : d.preprocessing.center_around_mean
+    }
+
+    return mlflow_dataset_params
+
 
 def main(config, trainer_args):
 
@@ -196,6 +217,8 @@ def main(config, trainer_args):
                 mlflow.log_figure("comp_graph_network.png")
 
             mlflow.log_params(get_mlflow_parameters(config))
+            mlflow.log_params(get_mlflow_dataset_params(config))
+            
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
