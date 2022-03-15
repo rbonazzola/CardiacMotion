@@ -192,7 +192,11 @@ def main(config, trainer_args):
     if config.log_to_mlflow:
         if config.mlflow.experiment_name is None:
             config.mlflow.experiment_name = "default"
-        trainer_args.logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri=config.mlflow.tracking_uri, artifact_location=config.mlflow.artifact_location)
+        trainer_args.logger = MLFlowLogger(
+            experiment_name=config.mlflow.experiment_name,
+            tracking_uri=config.mlflow.tracking_uri,
+            artifact_location=config.mlflow.artifact_location
+        )
         mlflow.set_tracking_uri(config.mlflow.tracking_uri)
     else:
         trainer_args.logger = None
@@ -209,7 +213,13 @@ def main(config, trainer_args):
           # If the experiment already exists, we can just retrieve its ID
             exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
 
-        with mlflow.start_run(run_id=trainer.logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
+        run_info = {
+            "run_id": trainer.logger.run_id,
+            "experiment_id": exp_id,
+            "run_name": config.mlflow.run_name
+        }
+
+        with mlflow.start_run(**run_info) as run:
             
             if config.log_computational_graph:
                 yhat = model(next(iter(dm.train_dataloader()))[0])
@@ -218,7 +228,7 @@ def main(config, trainer_args):
 
             mlflow.log_params(get_mlflow_parameters(config))
             mlflow.log_params(get_mlflow_dataset_params(config))
-            
+
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
