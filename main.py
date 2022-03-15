@@ -163,6 +163,27 @@ def get_mlflow_parameters(config):
 
     return mlflow_parameters
 
+def get_mlflow_dataset_params(config):
+
+    d = config.dataset
+
+    mlflow_dataset_params = {
+         "dataset_type" : d.data_type.: "synthetic",
+         "dataset_max_static_amplitude" : d.parameters.amplitde_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitde_dynamic_max,
+         "dataset_n_timeframes" : d.parameters.T,
+         "dataset_freq_max" : d.parameters.freq_max,
+         "dataset_l_max" : d.parameters.l_max,
+         "dataset_complexity_c": (d.parameters.l_max + 1) ** 2,
+         "dataset_complexity_s": ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max,
+         "dataset_complexity": ((d.parameters.l_max + 1) ** 2) * (d.parameters.freq_max + 1),
+         "dataset_random_seed" : d.parameters.random_seed,
+         "dataset_template": "icosphere", #TODO: add this as parameter in the configuration
+         "dataset_center_around_mean" : d.preprocessing.center_around_mean
+    }
+
+    return mlflow_dataset_params
+
 
 def main(config, trainer_args):
 
@@ -171,7 +192,11 @@ def main(config, trainer_args):
     if config.log_to_mlflow:
         if config.mlflow.experiment_name is None:
             config.mlflow.experiment_name = "default"
-        trainer_args.logger = MLFlowLogger(experiment_name=config.mlflow.experiment_name, tracking_uri=config.mlflow.tracking_uri, artifact_location=config.mlflow.artifact_location)
+        trainer_args.logger = MLFlowLogger(
+            experiment_name=config.mlflow.experiment_name,
+            tracking_uri=config.mlflow.tracking_uri,
+            artifact_location=config.mlflow.artifact_location
+        )
         mlflow.set_tracking_uri(config.mlflow.tracking_uri)
     else:
         trainer_args.logger = None
@@ -188,7 +213,13 @@ def main(config, trainer_args):
           # If the experiment already exists, we can just retrieve its ID
             exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
 
-        with mlflow.start_run(run_id=trainer.logger.run_id, experiment_id=exp_id, run_name=config.mlflow.run_name) as run:
+        run_info = {
+            "run_id": trainer.logger.run_id,
+            "experiment_id": exp_id,
+            "run_name": config.mlflow.run_name
+        }
+
+        with mlflow.start_run(**run_info) as run:
             
             if config.log_computational_graph:
                 yhat = model(next(iter(dm.train_dataloader()))[0])
@@ -196,6 +227,8 @@ def main(config, trainer_args):
                 mlflow.log_figure("comp_graph_network.png")
 
             mlflow.log_params(get_mlflow_parameters(config))
+            mlflow.log_params(get_mlflow_dataset_params(config))
+
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
