@@ -139,4 +139,22 @@ def load_config(yaml_config_file, args=None):
         if args.learning_rate is not None:
             config.optimizer.parameters.lr = args.learning_rate
 
+        if args.n_channels_enc is not None:
+            config.optimizer.parameters.lr = args.n_channels_enc
+
+        if args.n_channels_dec_c is not None:
+            config.optimizer.parameters.lr = args.n_channels_dec_c
+
+        if args.n_channels_dec_s is not None:
+            config.optimizer.parameters.lr = args.n_channels_dec_s
+
+        if args.reconstruction_loss_type is not None:
+            config.optimizer.parameters.lr = args.reconstruction_loss_type
+
+        if args.learning_rate is not None:
+            config.optimizer.parameters.lr = args.learning_rate
+
+        if args.learning_rate is not None:
+            config.optimizer.parameters.lr = args.learning_rate
+
     return config

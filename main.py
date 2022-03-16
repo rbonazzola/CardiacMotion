@@ -150,6 +150,7 @@ def get_mlflow_parameters(config):
     mlflow_parameters = {
         "platform": check_output(["hostname"]).strip().decode(),
         "w_kl": config.loss.regularization.weight,
+        "w_s": config.loss.reconstruction_s.weight,
         "latent_dim_s": config.network_architecture.latent_dim_s,
         "latent_dim_c": config.network_architecture.latent_dim_c,
         "convolution_type": config.network_architecture.convolution.type,
@@ -254,31 +255,66 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pytorch Trainer for Convolutional Mesh Autoencoders")
 
     CLI_args = {
-      ("-c", "--conf",):  { 
+
+      ("-c", "--conf",):  {
           "help": "path of config file", 
-          "default": "config/config_test.yaml" }, 
-      ("--w_kl",): { 
-          "help": "weight of KL term",
-          "type": float, "default": None },
+          "default": "config/config_test.yaml" },
+
+      ("--n_channels",): {
+           "help": "Number of channels (feature maps). If the rest of the --n_channels are not provided, it will assign these numbers to the encoder, content decoder and style decoder.",
+           "nargs":"+", "type": int, "default": None},
+
+      ("--reduction_factors",): {
+           "help": "Decimation factors for the mesh",
+           "nargs": "+", "type": int, "default": None},
+      ("--n_channels_enc",): {
+           "help": "Number of channels (feature maps) in the encoder, from input to the most hidden layer.",
+           "nargs":"+", "type": int, "default": None},
+      ("--n_channels_dec_c",): {
+            "help": "Number of channels (feature maps) in the content decoder, from the most hidden layer to the output.",
+            "nargs":"+", "type": int, "default": None},
+      ("--n_channels_dec_s",): {
+            "help": "Number of channels (feature maps) in the style decoder, from the most hidden layer to the output.",
+            "nargs":"+", "type": int, "default": None},
+      ("--latent_dim_c",): {
+            "help": "Dimension of the content part of the latent space",
+            "type": int, "default": None},
+      ("--latent_dim_s",): {
+            "help": "Dimension of the style part of the latent space",
+            "type": int, "default": None},
+
+      ("--activation_function",): {
+            "help": "Activation functions to be used",
+            "nargs": "+", "type": str, "default": None},
+
+
+      ("--polynomial_degree",): {
+            "help": "Chebyshev polynomial degree",
+            "type": int, "default": None},
+
+      ("--reconstruction_loss_type",): {
+            "help": "Type of reconstruction loss",
+            "type": str, "default": None},
+      ("--w_kl",): {
+            "help": "weight of KL term",
+            "type": float, "default": None},
       ("--w_s",): {
-          "help": "weight of \"style\" reconstruction term",
-          "type": float, "default": None},
-      ("--latent_dim_c",): { 
-          "help": "Dimension of the content part of the latent space", 
-          "type": int, "default": None }, 
-      ("--latent_dim_s",): { 
-          "help": "Dimension of the style part of the latent space", 
-          "type": int, "default": None }, 
-      ("--no_phase_input",): { 
+            "help": "weight of the \"style\" reconstruction term in the lost function",
+            "type": float, "default": None},
+
+      ("--no_phase_input",): {
           "help":"If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
           "default": None, 
-          "action": "store_true" }, 
+          "action": "store_true" },
+
       ("--learning_rate", "-lr",): { 
           "help":"Learning rate",
           "type": float},
+
       ("--batch_size",): { 
           "help":"Training batch size. If provided will overwrite the batch size from the configuration file.",
-          "type": int, "default": None }, 
+          "type": int, "default": None },
+
       ("--disable_mlflow_logging",): { 
           "help": "Set this flag if you don't want to log the run's data to MLflow.",
           "default": False, "action": "store_true", },
@@ -287,12 +323,14 @@ if __name__ == "__main__":
           "help": "YAML configuration file containing information to log model information to MLflow." },
       ("--mlflow_experiment", ): {
           "help": "MLflow experiment's name" },
+
       ("--show_config", ): {
           "action": "store_true",
           "help": "Display run's configuration" },
       ("--log_computational_graph", ): {
           "action": "store_true",
           "help": "If True, will log the computational graph as an artifact (not fully functional due to limitations of the torchviz library)" },
+
       ("--dry-run", "--dry_run"): {
           "dest": "dry_run",
           "default": False,
