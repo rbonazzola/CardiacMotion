@@ -238,6 +238,36 @@ def main(config, trainer_args):
         result = trainer.test(datamodule=dm)
 
 
+class CustomAction(argparse.Action):
+    def __init__(self, option_strings, dest, nargs=None, const=None, default=None, type=None, choices=None, required=False, help=None, metavar=None):
+
+        argparse.Action.__init__(self, option_strings=option_strings, dest=dest, nargs=nargs, const=const, default=default, type=type, choices=choices, required=required, help=help, metavar=metavar)
+
+        for name, value in sorted(locals().items()):
+            if name == 'self' or value is None:
+                continue
+        return
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        'Processing CustomAction for "%s"' % self.dest
+        print
+        '  parser = %s' % id(parser)
+        print
+        '  values = %r' % values
+        print
+        '  option_string = %r' % option_string
+
+        # Do some arbitrary processing of the input values
+        if isinstance(values, list):
+            values = [v.upper() for v in values]
+        else:
+            values = values.upper()
+        # Save the results in the namespace using the destination
+        # variable given to our constructor.
+        setattr(namespace, self.dest, values)
+
+
+
 if __name__ == "__main__":
 
     def overwrite_config_items(config, args):
@@ -255,90 +285,96 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pytorch Trainer for Convolutional Mesh Autoencoders")
 
     CLI_args = {
-
-      ("-c", "--conf",):  {
-          "help": "path of config file", 
-          "default": "config/config_test.yaml" },
-
-      ("--n_channels",): {
-           "help": "Number of channels (feature maps). If the rest of the --n_channels are not provided, it will assign these numbers to the encoder, content decoder and style decoder.",
-           "nargs":"+", "type": int, "default": None},
-
-      ("--reduction_factors",): {
-           "help": "Decimation factors for the mesh",
-           "nargs": "+", "type": int, "default": None},
-      ("--n_channels_enc",): {
-           "help": "Number of channels (feature maps) in the encoder, from input to the most hidden layer.",
-           "nargs":"+", "type": int, "default": None},
-      ("--n_channels_dec_c",): {
-            "help": "Number of channels (feature maps) in the content decoder, from the most hidden layer to the output.",
-            "nargs":"+", "type": int, "default": None},
-      ("--n_channels_dec_s",): {
-            "help": "Number of channels (feature maps) in the style decoder, from the most hidden layer to the output.",
-            "nargs":"+", "type": int, "default": None},
-      ("--latent_dim_c",): {
-            "help": "Dimension of the content part of the latent space",
-            "type": int, "default": None},
-      ("--latent_dim_s",): {
-            "help": "Dimension of the style part of the latent space",
-            "type": int, "default": None},
-
-      ("--activation_function",): {
-            "help": "Activation functions to be used",
-            "nargs": "+", "type": str, "default": None},
-
-
-      ("--polynomial_degree",): {
-            "help": "Chebyshev polynomial degree",
-            "type": int, "default": None},
-
-      ("--reconstruction_loss_type",): {
-            "help": "Type of reconstruction loss",
-            "type": str, "default": None},
-      ("--w_kl",): {
-            "help": "weight of KL term",
-            "type": float, "default": None},
-      ("--w_s",): {
-            "help": "weight of the \"style\" reconstruction term in the lost function",
-            "type": float, "default": None},
-
-      ("--no_phase_input",): {
-          "help":"If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
-          "default": None, 
-          "action": "store_true" },
-
-      ("--learning_rate", "-lr",): { 
-          "help":"Learning rate",
-          "type": float},
-
-      ("--batch_size",): { 
-          "help":"Training batch size. If provided will overwrite the batch size from the configuration file.",
-          "type": int, "default": None },
-
-      ("--disable_mlflow_logging",): { 
-          "help": "Set this flag if you don't want to log the run's data to MLflow.",
-          "default": False, "action": "store_true", },
-      ("--mlflow_config", ): {
-          "action": "store_true",
-          "help": "YAML configuration file containing information to log model information to MLflow." },
-      ("--mlflow_experiment", ): {
-          "help": "MLflow experiment's name" },
-
-      ("--show_config", ): {
-          "action": "store_true",
-          "help": "Display run's configuration" },
-      ("--log_computational_graph", ): {
-          "action": "store_true",
-          "help": "If True, will log the computational graph as an artifact (not fully functional due to limitations of the torchviz library)" },
-
-      ("--dry-run", "--dry_run"): {
-          "dest": "dry_run",
-          "default": False,
-          "action": "store_true",
-          "help": "Dry run: just prints out the parameters of the execution but performs no training.",
-       }
+        ("-c", "--conf",): {
+            "help": "path of config file",
+            "default": "config/config_test.yaml"},
+        ("--show_config",): {
+            "action": "store_true",
+            "help": "Display run's configuration"},
+        ("--log_computational_graph",): {
+            "action": "store_true",
+            "help": "If True, will log the computational graph as an artifact (not fully functional due to limitations of the torchviz library)"},
+        ("--dry-run", "--dry_run"): {
+            "dest": "dry_run",
+            "default": False,
+            "action": "store_true",
+            "help": "Dry run: just prints out the parameters of the execution but performs no training.",
+        }
     }
 
+    network_architecture_args = {
+        ("--n_channels",): {
+            "help": "Number of channels (feature maps). If the rest of the --n_channels_* arguments are not provided, it will assign these numbers to the encoder, content decoder and style decoder.",
+            "nargs": "+", "type": int, "default": None},
+        ("--reduction_factors",): {
+            "help": "Decimation factors for the mesh",
+            "nargs": "+", "type": int, "default": None},
+        ("--n_channels_enc",): {
+            "help": "Number of channels (feature maps) in the encoder, from input to the most hidden layer.",
+            "nargs": "+", "type": int, "default": None},
+        ("--n_channels_dec_c",): {
+            "help": "Number of channels (feature maps) in the content decoder, from the most hidden layer to the output.",
+            "nargs": "+", "type": int, "default": None},
+        ("--n_channels_dec_s",): {
+            "help": "Number of channels (feature maps) in the style decoder, from the most hidden layer to the output.",
+            "nargs": "+", "type": int, "default": None},
+        ("--latent_dim_c",): {
+            "help": "Dimension of the content part of the latent space",
+            "type": int, "default": None},
+        ("--latent_dim_s",): {
+            "help": "Dimension of the style part of the latent space",
+            "type": int, "default": None},
+        ("--activation_function",): {
+            "help": "Activation functions to be used",
+            "nargs": "+", "type": str, "default": None},
+        ("--polynomial_degree",): {
+            "help": "Chebyshev polynomial degree",
+            "type": int, "default": None},
+        ("--no_phase_input", ): {
+            "help": "If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
+            "default": None,
+            "action": "store_true"}
+    }
+
+    loss_args = {
+        ("--reconstruction_loss_type",): {
+            "help": "Type of reconstruction loss",
+            "type": str, "default": None},
+        ("--w_kl",): {
+            "help": "weight of KL term",
+            "type": float, "default": None},
+        ("--w_s",): {
+            "help": "weight of the \"style\" reconstruction term in the lost function",
+            "type": float, "default": None},
+    }
+
+    training_args = {
+        ("--learning_rate", "-lr",): {
+            "help": "Learning rate",
+            "type": float},
+        ("--batch_size",): {
+            "help": "Training batch size. If provided will overwrite the batch size from the configuration file.",
+            "type": int, "default": None},
+    }
+
+    mlflow_args = {
+        ("--disable_mlflow_logging",): {
+            "help": "Set this flag if you don't want to log the run's data to MLflow.",
+            "default": False, "action": "store_true", },
+        ("--mlflow_config",): {
+            "action": "store_true",
+            "help": "YAML configuration file containing information to log model information to MLflow."},
+        ("--mlflow_experiment",): {
+            "help": "MLflow experiment's name"}
+    }
+
+    CLI_args = {
+        **CLI_args,
+        **network_architecture_args,
+        **loss_args,
+        **training_args,
+        **mlflow_args
+    }
 
     #to avoid a little bit of boilerplate
     for k, v in CLI_args.items():
