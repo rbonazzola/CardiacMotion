@@ -1,7 +1,23 @@
 import os
 import yaml
+import functools
 from argparse import Namespace
-from IPython import embed
+from collections.abc import MutableMapping
+
+def rsetattr(obj, attr, val):
+    pre, _, post = attr.rpartition('.')
+    return setattr(rgetattr(obj, pre) if pre else obj, post, val)
+
+
+# From: https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-objects/31174427?noredirect=1#comment86638618_31174427
+def rgetattr(obj, attr, *args):
+    def _getattr(obj, attr):
+        try:
+            return getattr(obj, attr, *args)
+        except AttributeError:
+            setattr(obj, attr, Namespace())
+            return getattr(obj, attr, *args)
+    return functools.reduce(_getattr, [obj] + attr.split('.'))
 
 
 def is_yaml_file(x):
@@ -20,7 +36,7 @@ def get_repo_rootdir():
 def unfold_config(token, no_unfolding_for=[]):
     '''
     Parameters: 
-      token: a recursive structure composed of a path to a yaml file or a dictionary composed of such structures.
+      token: a recursive structure composed of either 1. a path to a yaml file or 2. a dictionary composed of such structures.
       no_unfolding_for: a list of dict keys for which the yaml shouldn't be unfolded, and instead kept as a path
     Returns: A dictionary with all the yaml files replaces by their content.
     '''
@@ -46,10 +62,21 @@ def unfold_config(token, no_unfolding_for=[]):
     return token
 
 
+def to_dict(token):
+    '''
+    Converts a (possibly nested) namespace to a nested dictionary
+    '''
+
+    if isinstance(token, Namespace):
+        namespace_as_dict = token.__dict__
+        token = {k: to_dict(v) for k, v in namespace_as_dict.items()}
+    return token
+
+
 def recursive_namespace(dd):
     '''
     Converts a (possibly nested) dictionary into a namespace.
-    This allows for auto-completion
+    This allows for auto-completion.
     '''
     for d in dd:
         has_any_dicts = False
@@ -62,7 +89,7 @@ def recursive_namespace(dd):
 def sanity_check(config):
     
     '''
-    Perform sanity check on the configuration provided.
+    Perform sanity check on the provided configuration.
     '''
 
     pol_deg_dim = len(config.network_architecture.convolution.parameters.polynomial_degree)
@@ -80,23 +107,32 @@ def sanity_check(config):
        )
 
 
-def load_config(yaml_config_file, args=None):
-    
-    
+def _flatten_dict_gen(d, parent_key, sep):
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, MutableMapping):
+            yield from flatten_dict(v, new_key, sep=sep).items()
+        else:
+            yield new_key, v
+
+
+def flatten_dict(d: MutableMapping, parent_key: str = '', sep: str = '.'):
+    return dict(_flatten_dict_gen(d, parent_key, sep))
+
+
+def load_yaml_config(yaml_config_file):
+
     # config = yaml.safe_load(config)    
     config = unfold_config(yaml_config_file)    
         # I am using a namespace instead of a dictionary mainly because it enables auto-completion
     config = recursive_namespace(config)
-    
-    
+
     # The following parameters are meant to be lists of numbers, so they are parsed here from their string representation in the YAML file.
     config.network_architecture.convolution.parameters.polynomial_degree = \
     [int(x) for x in config.network_architecture.convolution.parameters.polynomial_degree.split()]
     
     config.network_architecture.pooling.parameters.downsampling_factors = \
     [int(x) for x in config.network_architecture.pooling.parameters.downsampling_factors.split()]
-    
-
 
     if hasattr(config.network_architecture.convolution, "channels"):
       config.network_architecture.convolution.channels = \
@@ -114,47 +150,10 @@ def load_config(yaml_config_file, args=None):
       config.network_architecture.convolution.channels_dec_s = \
       [int(x) for x in config.network_architecture.convolution.channels_dec_s.split()]
 
+    if hasattr(config.network_architecture, "activation_function"):
+      config.network_architecture.activation_function = \
+      [x for x in config.network_architecture.activation_function.split()]
+
     sanity_check(config)
-
-    if args is not None:
-
-        if args.w_s is not None:
-            config.loss.reconstruction_s.weight = args.w_s
-
-        if args.w_kl is not None:
-            config.loss.regularization.weight = args.w_kl
-    
-        if args.latent_dim_c is not None:
-            config.network_architecture.latent_dim_c = args.latent_dim_c
-        
-        if args.latent_dim_s is not None:
-            config.network_architecture.latent_dim_s = args.latent_dim_s
-    
-        if args.batch_size is not None:
-            config.optimizer.batch_size = args.batch_size
-        
-        if args.no_phase_input is not None:
-            config.network_architecture.phase_input = not args.no_phase_input
-        
-        if args.learning_rate is not None:
-            config.optimizer.parameters.lr = args.learning_rate
-
-        if args.n_channels_enc is not None:
-            config.optimizer.parameters.lr = args.n_channels_enc
-
-        if args.n_channels_dec_c is not None:
-            config.optimizer.parameters.lr = args.n_channels_dec_c
-
-        if args.n_channels_dec_s is not None:
-            config.optimizer.parameters.lr = args.n_channels_dec_s
-
-        if args.reconstruction_loss_type is not None:
-            config.optimizer.parameters.lr = args.reconstruction_loss_type
-
-        if args.learning_rate is not None:
-            config.optimizer.parameters.lr = args.learning_rate
-
-        if args.learning_rate is not None:
-            config.optimizer.parameters.lr = args.learning_rate
 
     return config
