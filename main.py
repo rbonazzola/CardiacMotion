@@ -225,7 +225,8 @@ def main(config, trainer_args):
         run_info = {
             "run_id": trainer.logger.run_id,
             "experiment_id": exp_id,
-            "run_name": config.mlflow.run_name
+            "run_name": config.mlflow.run_name,
+            "tags": config.additional_mlflow_tags
         }
 
         with mlflow.start_run(**run_info) as run:
@@ -237,6 +238,7 @@ def main(config, trainer_args):
 
             mlflow.log_params(get_mlflow_parameters(config))
             mlflow.log_params(get_mlflow_dataset_params(config))
+            mlflow.log_params(config.additional_mlflow_params)
 
             trainer.fit(model, datamodule=dm)
             result = trainer.test(datamodule=dm)

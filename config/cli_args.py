@@ -6,6 +6,19 @@ class ArgumentAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         rsetattr(namespace, self.dest, values)
 
+class kwargs_append_action(argparse.Action):
+    """
+    argparse action to split an argument into KEY=VALUE form
+    on append to a dictionary.
+    """
+
+    def __call__(self, parser, args, values, option_string=None):
+        try:
+            d = dict(map(lambda x: x.split('='),values))
+        except ValueError as ex:
+            raise argparse.ArgumentError(self, f"Could not parse argument \"{values}\" as k1=v1 k2=v2 ... format")
+        setattr(args, self.dest, d)
+
 network_architecture_args = {
     ("--n_channels",): {
         "help": "Number of channels (feature maps). If the rest of the --n_channels_* arguments are not provided, it will assign these numbers to the encoder, content decoder and style decoder.",
@@ -103,7 +116,24 @@ mlflow_args = {
     ("--mlflow_experiment",): {
         "help": "MLflow experiment's name",
         "dest": "config.mlflow.experiment_name",
-        "action": ArgumentAction}
+        "action": ArgumentAction
+    },
+    ("--additional_mlflow_params",): {
+        "nargs": '+',
+        "required": False,
+        "action": kwargs_append_action,
+        "metavar": "KEY=VALUE",
+        "help": "Add additional key/value params to MLflow."
+    },
+    ("--additional_mlflow_tags",): {
+        "nargs": '+',
+        "required": False,
+        "action": kwargs_append_action,
+        "metavar": "KEY=VALUE",
+        "help": "Add additional key/value tags to MLflow."
+    }
+}
+
 }
 #   ("--mlflow_config",): {
 #       "action": LoadYamlConfig,
