@@ -94,7 +94,7 @@ loss_args = {
 training_args = {
     ("--learning_rate", "-lr",): {
         "help": "Learning rate",
-        "dest": "config.optimizer.parameters.learning_rate",
+        "dest": "config.optimizer.parameters.lr",
         "type": float,
         "action": ArgumentAction},
     ("--batch_size",): {
