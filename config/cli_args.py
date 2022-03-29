@@ -121,6 +121,7 @@ mlflow_args = {
     ("--additional_mlflow_params",): {
         "nargs": '+',
         "required": False,
+        "dest": "config.additional_mlflow_params",
         "action": kwargs_append_action,
         "metavar": "KEY=VALUE",
         "help": "Add additional key/value params to MLflow."
@@ -128,13 +129,13 @@ mlflow_args = {
     ("--additional_mlflow_tags",): {
         "nargs": '+',
         "required": False,
+        "dest": "config.additional_mlflow_tags",
         "action": kwargs_append_action,
         "metavar": "KEY=VALUE",
         "help": "Add additional key/value tags to MLflow."
     }
 }
 
-}
 #   ("--mlflow_config",): {
 #       "action": LoadYamlConfig,
 #       "help": "YAML configuration file containing information to log model information to MLflow.",
