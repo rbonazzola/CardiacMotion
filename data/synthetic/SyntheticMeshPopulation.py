@@ -240,6 +240,33 @@ class SyntheticMeshPopulation(object):
         with open(self._ofile, "wb") as ff:
             pkl.dump(self, ff)
 
+
+    def render_mesh_as_png(self, mesh3D, filename,
+                           camera_position='xy', show_edges=False,
+                           **kwargs)
+
+        '''  
+        Produces a png file representing a static 3D mesh.
+        - params
+        ::mesh4D:: a sequence of Trimesh mesh objects. 
+        ::mesh_connectivity:: faces
+        ::filename:: the name of the output png file. 
+        ::camera_position::
+        
+        - return:  
+        None, only produces the png file. 
+        '''
+
+        plotter = pv.Plotter(off_screen=True)
+        connectivity = mesh3D.faces
+        connectivity = np.c_[np.ones(connectivity.shape[0]) * 3, connectivity].astype(int)
+
+        mesh = pv.PolyData(mesh3D.vertices, connectivity)
+        plotter.camera_position = camera_position
+        actor = plotter.add_mesh(mesh, show_edges=show_edges)
+        plotter.screenshot(filename if filename.endswith("png") else filename + ".png")
+
+
     def _generate_gif(self, mesh4D, mesh_connectivity, filename, camera_position='xy', show_edges=False, **kwargs):
         
         '''

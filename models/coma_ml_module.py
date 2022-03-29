@@ -158,12 +158,9 @@ class CoMA(pl.LightningModule):
             # kld_loss_c = torch.zeros_like(loss)
             # kld_loss_s = torch.zeros_like(loss)
 
-        mse_per_subj_per_time = mse(s_t, shat_t)
- 
-        rec_ratio_to_time_mean = mse_per_subj_per_time / mse_mesh_to_tmp_mean
-       
         rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
-        rec_ratio_to_pop_mean = mse_per_subj_per_time / mse_mesh_to_pop_mean
+        rec_ratio_to_pop_mean = mse(s_t, shat_t) / mse_mesh_to_pop_mean
+        rec_ratio_to_time_mean = mse(s_t, shat_t) / mse_mesh_to_tmp_mean
 
         return loss,\
                recon_loss, recon_loss_c, recon_loss_s,\
