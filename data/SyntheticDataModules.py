@@ -109,6 +109,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
             
             self.split_lengths = [train_len, val_len, test_len]
 
+        self.template = popu.template
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(popu, self.split_lengths)
 
 

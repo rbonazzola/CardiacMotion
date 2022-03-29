@@ -241,7 +241,7 @@ class SyntheticMeshPopulation(object):
             pkl.dump(self, ff)
 
 
-    def render_mesh_as_png(self, mesh3D, filename,
+    def render_mesh_as_png(mesh3D, filename,
                            camera_position='xy', show_edges=False,
                            **kwargs)
 
