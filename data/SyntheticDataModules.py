@@ -120,3 +120,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=1, num_workers=8)
+
+    def predict_dataloader(self):
+        predict_dataset = torch.utils.data.Subset(self.test_dataset, range(16))
+        return DataLoader(predict_dataset, batch_size=16, num_workers=8)

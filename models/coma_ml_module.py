@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from IPython import embed # uncomment for debugging
 from models.model_c_and_s import Coma4D_C_and_S
+from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -82,9 +83,7 @@ class CoMA(pl.LightningModule):
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
         else:
             loss = recon_loss
-            kld_loss = torch.zeros_like(loss)
-            kld_loss_c = torch.zeros_like(loss)
-            kld_loss_s = torch.zeros_like(loss)
+            kld_loss_c = kld_loss_s = torch.zeros_like(loss)
 
         kld_loss = kld_loss_c + kld_loss_s
 
@@ -254,7 +253,18 @@ class CoMA(pl.LightningModule):
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
 
-        self.log_dict(loss_dict)            
+        self.log_dict(loss_dict)
+
+    def predict_step(self, batch, batch_idx):
+
+        s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
+        bottleneck, time_avg_s_hat, shat_t = self(s_t)
+
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s, f"temporal_avg_mesh_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat, f"temporal_avg_mesh_rec_{batch_idx}.png")
+        self.logger.experiment.log_artifact(f"temporal_avg_mesh_{batch_idx}.png")
+        self.logger.experiment.log_artifact(f"temporal_avg_mesh_rec_{batch_idx}.png")
+
 
 
     # TODO: Select optimizer from menu (dict)

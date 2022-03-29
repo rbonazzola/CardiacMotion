@@ -242,7 +242,8 @@ def main(config, trainer_args):
             mlflow.log_params(config.additional_mlflow_params)
 
             trainer.fit(model, datamodule=dm)
-            result = trainer.test(datamodule=dm)
+            trainer.test(datamodule=dm) # Generates metrics for the full test dataset
+            trainer.predict(datamodule=dm) # Generates figures for a few samples
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
