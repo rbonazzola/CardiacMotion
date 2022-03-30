@@ -60,6 +60,7 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
         "upsample_matrices": U_t,
         "adjacency_matrices": A_t,
         "n_nodes": n_nodes,
+        "template": template_mesh
     }
 
 

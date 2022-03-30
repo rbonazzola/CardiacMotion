@@ -260,8 +260,8 @@ class CoMA(pl.LightningModule):
         s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
         bottleneck, time_avg_s_hat, shat_t = self(s_t)
 
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s, f"temporal_avg_mesh_{batch_idx}.png")
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat, f"temporal_avg_mesh_rec_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s, self.model.template_mesh.faces, f"temporal_avg_mesh_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat, self.model.template_mesh.faces, f"temporal_avg_mesh_rec_{batch_idx}.png")
         self.logger.experiment.log_artifact(f"temporal_avg_mesh_{batch_idx}.png")
         self.logger.experiment.log_artifact(f"temporal_avg_mesh_rec_{batch_idx}.png")
 
