@@ -274,8 +274,13 @@ if __name__ == "__main__":
         logger.error("Config not found" + args.yaml_config_file)
 
     ref_config = load_yaml_config(args.yaml_config_file)
-    config_to_replace = args.config
-    config = overwrite_config_items(ref_config, config_to_replace)
+
+    try:
+        config_to_replace = args.config
+        config = overwrite_config_items(ref_config, config_to_replace)
+    except AttributeError:
+        # If there are no elements to replace
+        pass
 
     #TOFIX: args contains other arguments that do not correspond to the trainer
     trainer_args = args
