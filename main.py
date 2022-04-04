@@ -179,8 +179,8 @@ def get_mlflow_dataset_params(config):
 
     mlflow_dataset_params = {
          "dataset_type" : d.data_type,
-         "dataset_max_static_amplitude" : d.parameters.amplitde_static_max,
-         "dataset_max_dynamic_amplitude" : d.parameters.amplitde_dynamic_max,
+         "dataset_max_static_amplitude" : d.parameters.amplitude_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitude_dynamic_max,
          "dataset_n_timeframes" : d.parameters.T,
          "dataset_freq_max" : d.parameters.freq_max,
          "dataset_l_max" : d.parameters.l_max,
@@ -228,7 +228,7 @@ def main(config, trainer_args):
             "run_id": trainer.logger.run_id,
             "experiment_id": exp_id,
             "run_name": config.mlflow.run_name,
-            "tags": config.additional_mlflow_tags
+            #"tags": config.additional_mlflow_tags
         }
 
         with mlflow.start_run(**run_info) as run:
@@ -240,7 +240,7 @@ def main(config, trainer_args):
 
             mlflow.log_params(get_mlflow_parameters(config))
             mlflow.log_params(get_mlflow_dataset_params(config))
-            mlflow.log_params(config.additional_mlflow_params)
+            #mlflow.log_params(config.additional_mlflow_params)
 
             trainer.fit(model, datamodule=dm)
             trainer.test(datamodule=dm) # Generates metrics for the full test dataset

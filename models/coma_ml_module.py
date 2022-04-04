@@ -71,7 +71,7 @@ class CoMA(pl.LightningModule):
 
         # data, ids = batch
         s_t, time_avg_s, _, _ = batch
-        bottleneck, time_avg_shat, shat_t = self(moving_meshes)
+        bottleneck, time_avg_shat, shat_t = self(s_t)
         recon_loss_c = self.rec_loss(time_avg_s, time_avg_shat)
         recon_loss_s = self.rec_loss(s_t, shat_t)
 
@@ -260,10 +260,10 @@ class CoMA(pl.LightningModule):
         s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
         bottleneck, time_avg_s_hat, shat_t = self(s_t)
 
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s, self.model.template_mesh.faces, f"temporal_avg_mesh_{batch_idx}.png")
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat, self.model.template_mesh.faces, f"temporal_avg_mesh_rec_{batch_idx}.png")
-        self.logger.experiment.log_artifact(f"temporal_avg_mesh_{batch_idx}.png")
-        self.logger.experiment.log_artifact(f"temporal_avg_mesh_rec_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f,  f"temporal_avg_mesh_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+        self.logger.experiment.log_artifact(local_path=f"temporal_avg_mesh_{batch_idx}.png", artifact_path="images", run_id=self.logger.run_id)
+        self.logger.experiment.log_artifact(local_path=f"temporal_avg_mesh_{batch_idx}_rec.png", artifact_path="images", run_id=self.logger.run_id)
 
 
 
