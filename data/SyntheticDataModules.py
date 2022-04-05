@@ -106,7 +106,6 @@ class SyntheticMeshesDM(pl.LightningDataModule):
             train_len = int(self.split_fractions[0] * len(popu))
             val_len = int(self.split_fractions[1] * len(popu))            
             test_len = len(popu) - train_len - val_len
-            
             self.split_lengths = [train_len, val_len, test_len]
 
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(popu, self.split_lengths)
@@ -120,3 +119,8 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=1, num_workers=8)
+
+    def predict_dataloader(self):
+        predict_len = 16 if len(self.test_dataset) >= 16 else len(self.test_dataset)
+        predict_dataset = torch.utils.data.Subset(self.test_dataset, range(predict_len))
+        return DataLoader(predict_dataset, batch_size=16, num_workers=8)

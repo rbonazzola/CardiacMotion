@@ -3,11 +3,17 @@ import torch
 import torch.nn.functional as F
 from IPython import embed # uncomment for debugging
 from models.model_c_and_s import Coma4D_C_and_S
+from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
   "l1": F.l1_loss,
   "mse": F.mse_loss
 }
+
+def mse(s1, s2=None):
+    if s2 is None:
+        s2 = torch.zeros_like(s1)
+    return ((s1-s2)**2).sum(-1).mean(-1)
 
 class CoMA(pl.LightningModule):
 
@@ -64,10 +70,11 @@ class CoMA(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         # data, ids = batch
-        moving_meshes, time_avg_mesh, _, _ = batch
-        bottleneck, s_avg, s_t = self(moving_meshes)
-        recon_loss_c = self.rec_loss(s_avg, time_avg_mesh)
-        recon_loss_s = self.rec_loss(s_t, moving_meshes)
+        s_t, time_avg_s, _, _ = batch
+        bottleneck, time_avg_shat, shat_t = self(s_t)
+        recon_loss_c = self.rec_loss(time_avg_s, time_avg_shat)
+        recon_loss_s = self.rec_loss(s_t, shat_t)
+
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
@@ -76,9 +83,7 @@ class CoMA(pl.LightningModule):
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
         else:
             loss = recon_loss
-            kld_loss = torch.zeros_like(loss)
-            kld_loss_c = torch.zeros_like(loss)
-            kld_loss_s = torch.zeros_like(loss)
+            kld_loss_c = kld_loss_s = torch.zeros_like(loss)
 
         kld_loss = kld_loss_c + kld_loss_s
 
@@ -131,13 +136,13 @@ class CoMA(pl.LightningModule):
         The common part is performed here.
         '''
 
-        moving_meshes, time_avg_mesh, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
+        s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
 
-        bottleneck, s_avg, s_t = self(moving_meshes)
+        bottleneck, time_avg_s_hat, shat_t = self(s_t)
 
         # content
-        recon_loss_c = self.rec_loss(s_avg, time_avg_mesh)
-        recon_loss_s = self.rec_loss(s_t, moving_meshes)
+        recon_loss_c = self.rec_loss(time_avg_s, time_avg_s_hat)
+        recon_loss_s = self.rec_loss(s_t, shat_t)
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
@@ -148,16 +153,13 @@ class CoMA(pl.LightningModule):
             loss = recon_loss + self.w_kl * kld_loss
         else:
             loss = recon_loss
-            kld_loss = torch.zeros_like(loss)
-            kld_loss_c = torch.zeros_like(loss)
-            kld_loss_s = torch.zeros_like(loss)
+            kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(loss)
+            # kld_loss_c = torch.zeros_like(loss)
+            # kld_loss_s = torch.zeros_like(loss)
 
-        mse_per_subj_per_time = ((s_t-moving_meshes)**2).sum(axis=-1).mean(axis=-1)
- 
-        rec_ratio_to_time_mean = mse_per_subj_per_time / mse_mesh_to_tmp_mean
-       
-        rec_ratio_to_pop_mean_c = ((s_avg - time_avg_mesh)**2).sum(axis=-1).mean(axis=-1) / (time_avg_mesh**2).sum(axis=-1).mean(axis=-1)
-        rec_ratio_to_pop_mean = mse_per_subj_per_time / mse_mesh_to_pop_mean
+        rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
+        rec_ratio_to_pop_mean = mse(s_t, shat_t) / mse_mesh_to_pop_mean
+        rec_ratio_to_time_mean = mse(s_t, shat_t) / mse_mesh_to_tmp_mean
 
         return loss,\
                recon_loss, recon_loss_c, recon_loss_s,\
@@ -251,7 +253,18 @@ class CoMA(pl.LightningModule):
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
 
-        self.log_dict(loss_dict)            
+        self.log_dict(loss_dict)
+
+    def predict_step(self, batch, batch_idx):
+
+        s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
+        bottleneck, time_avg_s_hat, shat_t = self(s_t)
+
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f,  f"temporal_avg_mesh_{batch_idx}.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+        self.logger.experiment.log_artifact(local_path=f"temporal_avg_mesh_{batch_idx}.png", artifact_path="images", run_id=self.logger.run_id)
+        self.logger.experiment.log_artifact(local_path=f"temporal_avg_mesh_{batch_idx}_rec.png", artifact_path="images", run_id=self.logger.run_id)
+
 
 
     # TODO: Select optimizer from menu (dict)

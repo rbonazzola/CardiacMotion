@@ -1,7 +1,9 @@
 import pickle as pkl
+
+import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping 
 from pytorch_lightning.callbacks import RichModelSummary
-import pytorch_lightning as pl
+
 
 from IPython import embed
 from utils import mesh_operations
@@ -9,23 +11,19 @@ from utils.helpers import *
 from models.model import Coma4D
 from models.model_c_and_s import Coma4D_C_and_S
 from models.coma_ml_module import CoMA
-import hiddenlayer as hl
 from torchviz import make_dot
 
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
 
 from psbody.mesh import Mesh
-from config.load_config import load_config
-
+from config.load_config import load_yaml_config, to_dict
 
 from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 from pytorch_lightning.loggers import MLFlowLogger
 
 import argparse
-from argparse import Namespace
-
 import pprint
 
 def get_coma_matrices(config, dm, cache=True, from_cached=True):
@@ -62,6 +60,7 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
         "upsample_matrices": U_t,
         "adjacency_matrices": A_t,
         "n_nodes": n_nodes,
+        "template": template_mesh
     }
 
 
@@ -136,6 +135,7 @@ def get_dm_model_trainer(config, trainer_args):
             RichModelSummary(max_depth=-1)            
         ],
         gpus=trainer_args.gpus,
+        auto_select_gpus=trainer_args.auto_select_gpus,
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
         logger=trainer_args.logger,
@@ -147,19 +147,27 @@ def get_dm_model_trainer(config, trainer_args):
 
 def get_mlflow_parameters(config):
 
+    loss = config.loss
+    net = config.network_architecture
+    loss_params = {
+        "w_kl": loss.regularization.weight,
+        "w_s": loss.reconstruction_s.weight
+    }
+    net_params = {
+        "latent_dim_s": net.latent_dim_s,
+        "latent_dim_c": net.latent_dim_c,
+        "convolution_type": net.convolution.type,
+        "n_channels_enc": net.convolution.channels_enc,
+        "n_channels_dec_c": net.convolution.channels_dec_c,
+        "n_channels_dec_s": net.convolution.channels_dec_s,
+        "reduction_factors": net.pooling.parameters.downsampling_factors,
+        "phase_input": net.phase_input
+    }
+
     mlflow_parameters = {
         "platform": check_output(["hostname"]).strip().decode(),
-        "w_kl": config.loss.regularization.weight,
-        "w_s": config.loss.reconstruction_s.weight,
-        "latent_dim_s": config.network_architecture.latent_dim_s,
-        "latent_dim_c": config.network_architecture.latent_dim_c,
-        "convolution_type": config.network_architecture.convolution.type,
-        "n_channels_enc": config.network_architecture.convolution.channels_enc,
-        "n_channels_dec_c": config.network_architecture.convolution.channels_dec_c,
-        "n_channels_dec_s": config.network_architecture.convolution.channels_dec_s,
-        "reduction_factors": config.network_architecture.pooling.parameters.downsampling_factors,
-        "center_around_mean": config.dataset.preprocessing.center_around_mean,
-        "phase_input": config.network_architecture.phase_input
+        ** loss_params,
+        ** net_params,
     }
 
     return mlflow_parameters
@@ -186,11 +194,33 @@ def get_mlflow_dataset_params(config):
     return mlflow_dataset_params
 
 
+def get_mlflow_dataset_params(config):
+
+    d = config.dataset
+
+    mlflow_dataset_params = {
+         "dataset_type" : d.data_type,
+         "dataset_max_static_amplitude" : d.parameters.amplitude_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitude_dynamic_max,
+         "dataset_n_timeframes" : d.parameters.T,
+         "dataset_freq_max" : d.parameters.freq_max,
+         "dataset_l_max" : d.parameters.l_max,
+         "dataset_complexity_c": (d.parameters.l_max + 1) ** 2,
+         "dataset_complexity_s": ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max,
+         "dataset_complexity": ((d.parameters.l_max + 1) ** 2) * (d.parameters.freq_max + 1),
+         "dataset_random_seed" : d.parameters.random_seed,
+         "dataset_template": "icosphere", #TODO: add this as parameter in the configuration
+         "dataset_center_around_mean" : d.preprocessing.center_around_mean
+    }
+
+    return mlflow_dataset_params
+
+
 def main(config, trainer_args):
 
     #
 
-    if config.log_to_mlflow:
+    if config.mlflow:
         if config.mlflow.experiment_name is None:
             config.mlflow.experiment_name = "default"
         trainer_args.logger = MLFlowLogger(
@@ -206,7 +236,8 @@ def main(config, trainer_args):
 
     # gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
 
-    if config.log_to_mlflow:
+    if config.mlflow:
+
         mlflow.pytorch.autolog()
         try:
             exp_id = mlflow.create_experiment(config.mlflow.experiment_name, artifact_location=config.mlflow.artifact_location)
@@ -217,7 +248,8 @@ def main(config, trainer_args):
         run_info = {
             "run_id": trainer.logger.run_id,
             "experiment_id": exp_id,
-            "run_name": config.mlflow.run_name
+            "run_name": config.mlflow.run_name,
+            #"tags": config.additional_mlflow_tags
         }
 
         with mlflow.start_run(**run_info) as run:
@@ -229,9 +261,11 @@ def main(config, trainer_args):
 
             mlflow.log_params(get_mlflow_parameters(config))
             mlflow.log_params(get_mlflow_dataset_params(config))
+            #mlflow.log_params(config.additional_mlflow_params)
 
             trainer.fit(model, datamodule=dm)
-            result = trainer.test(datamodule=dm)
+            trainer.test(datamodule=dm) # Generates metrics for the full test dataset
+            trainer.predict(datamodule=dm) # Generates figures for a few samples
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
         trainer.fit(model, datamodule=dm)
@@ -270,131 +304,36 @@ class CustomAction(argparse.Action):
 
 if __name__ == "__main__":
 
-    def overwrite_config_items(config, args):
-        for attr, value in args.__dict__.items():
-            if attr in config.keys() and value is not None:
-                config[attr] = value
+    parser = argparse.ArgumentParser(
+        description="Pytorch Trainer for Convolutional Mesh Autoencoders",
+        argument_default=argparse.SUPPRESS
+    )
 
-    def to_dict(token): 
-        if isinstance(token, Namespace):
-          namespace_as_dict = token.__dict__
-          token = {k: to_dict(v) for k, v in namespace_as_dict.items()}
-        return token
-           
-
-    parser = argparse.ArgumentParser(description="Pytorch Trainer for Convolutional Mesh Autoencoders")
-
-    CLI_args = {
-        ("-c", "--conf",): {
-            "help": "path of config file",
-            "default": "config/config_test.yaml"},
-        ("--show_config",): {
-            "action": "store_true",
-            "help": "Display run's configuration"},
-        ("--log_computational_graph",): {
-            "action": "store_true",
-            "help": "If True, will log the computational graph as an artifact (not fully functional due to limitations of the torchviz library)"},
-        ("--dry-run", "--dry_run"): {
-            "dest": "dry_run",
-            "default": False,
-            "action": "store_true",
-            "help": "Dry run: just prints out the parameters of the execution but performs no training.",
-        }
-    }
-
-    network_architecture_args = {
-        ("--n_channels",): {
-            "help": "Number of channels (feature maps). If the rest of the --n_channels_* arguments are not provided, it will assign these numbers to the encoder, content decoder and style decoder.",
-            "nargs": "+", "type": int, "default": None},
-        ("--reduction_factors",): {
-            "help": "Decimation factors for the mesh",
-            "nargs": "+", "type": int, "default": None},
-        ("--n_channels_enc",): {
-            "help": "Number of channels (feature maps) in the encoder, from input to the most hidden layer.",
-            "nargs": "+", "type": int, "default": None},
-        ("--n_channels_dec_c",): {
-            "help": "Number of channels (feature maps) in the content decoder, from the most hidden layer to the output.",
-            "nargs": "+", "type": int, "default": None},
-        ("--n_channels_dec_s",): {
-            "help": "Number of channels (feature maps) in the style decoder, from the most hidden layer to the output.",
-            "nargs": "+", "type": int, "default": None},
-        ("--latent_dim_c",): {
-            "help": "Dimension of the content part of the latent space",
-            "type": int, "default": None},
-        ("--latent_dim_s",): {
-            "help": "Dimension of the style part of the latent space",
-            "type": int, "default": None},
-        ("--activation_function",): {
-            "help": "Activation functions to be used",
-            "nargs": "+", "type": str, "default": None},
-        ("--polynomial_degree",): {
-            "help": "Chebyshev polynomial degree",
-            "type": int, "default": None},
-        ("--no_phase_input", ): {
-            "help": "If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
-            "default": None,
-            "action": "store_true"}
-    }
-
-    loss_args = {
-        ("--reconstruction_loss_type",): {
-            "help": "Type of reconstruction loss",
-            "type": str, "default": None},
-        ("--w_kl",): {
-            "help": "weight of KL term",
-            "type": float, "default": None},
-        ("--w_s",): {
-            "help": "weight of the \"style\" reconstruction term in the lost function",
-            "type": float, "default": None},
-    }
-
-    training_args = {
-        ("--learning_rate", "-lr",): {
-            "help": "Learning rate",
-            "type": float},
-        ("--batch_size",): {
-            "help": "Training batch size. If provided will overwrite the batch size from the configuration file.",
-            "type": int, "default": None},
-    }
-
-    mlflow_args = {
-        ("--disable_mlflow_logging",): {
-            "help": "Set this flag if you don't want to log the run's data to MLflow.",
-            "default": False, "action": "store_true", },
-        ("--mlflow_config",): {
-            "action": "store_true",
-            "help": "YAML configuration file containing information to log model information to MLflow."},
-        ("--mlflow_experiment",): {
-            "help": "MLflow experiment's name"}
-    }
-
-    CLI_args = {
-        **CLI_args,
-        **network_architecture_args,
-        **loss_args,
-        **training_args,
-        **mlflow_args
-    }
+    from config.cli_args import CLI_args, ArgumentAction, overwrite_config_items
 
     #to avoid a little bit of boilerplate
     for k, v in CLI_args.items():
         parser.add_argument(*k, **v)
 
-    # add arguments specific to the 
-    parser = pl.Trainer.add_argparse_args(parser)   
+    # add arguments specific to the PyTorch Lightning trainer.
+    parser = pl.Trainer.add_argparse_args(parser)
 
     args = parser.parse_args()
 
     ### Load configuration
-    if not os.path.exists(args.conf):
-        logger.error("Config not found" + args.conf)
+    if not os.path.exists(args.yaml_config_file):
+        logger.error("Config not found" + args.yaml_config_file)
+
+    ref_config = load_yaml_config(args.yaml_config_file)
+    config_to_replace = args.config
+    config = overwrite_config_items(ref_config, config_to_replace)
 
     #TOFIX: args contains other arguments that do not correspond to the trainer
     trainer_args = args
 
-    config = load_config(args.conf, args)
     config.log_computational_graph = args.log_computational_graph
-    config.log_to_mlflow = not args.disable_mlflow_logging
+    if args.disable_mlflow_logging:
+        config.mlflow = None
       
     if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)
