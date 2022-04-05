@@ -172,6 +172,27 @@ def get_mlflow_parameters(config):
 
     return mlflow_parameters
 
+def get_mlflow_dataset_params(config):
+
+    d = config.dataset
+
+    mlflow_dataset_params = {
+         "dataset_type" : d.data_type.: "synthetic",
+         "dataset_max_static_amplitude" : d.parameters.amplitde_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitde_dynamic_max,
+         "dataset_n_timeframes" : d.parameters.T,
+         "dataset_freq_max" : d.parameters.freq_max,
+         "dataset_l_max" : d.parameters.l_max,
+         "dataset_complexity_c": (d.parameters.l_max + 1) ** 2,
+         "dataset_complexity_s": ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max,
+         "dataset_complexity": ((d.parameters.l_max + 1) ** 2) * (d.parameters.freq_max + 1),
+         "dataset_random_seed" : d.parameters.random_seed,
+         "dataset_template": "icosphere", #TODO: add this as parameter in the configuration
+         "dataset_center_around_mean" : d.preprocessing.center_around_mean
+    }
+
+    return mlflow_dataset_params
+
 
 def get_mlflow_dataset_params(config):
 
@@ -249,6 +270,36 @@ def main(config, trainer_args):
     else:
         trainer.fit(model, datamodule=dm)
         result = trainer.test(datamodule=dm)
+
+
+class CustomAction(argparse.Action):
+    def __init__(self, option_strings, dest, nargs=None, const=None, default=None, type=None, choices=None, required=False, help=None, metavar=None):
+
+        argparse.Action.__init__(self, option_strings=option_strings, dest=dest, nargs=nargs, const=const, default=default, type=type, choices=choices, required=required, help=help, metavar=metavar)
+
+        for name, value in sorted(locals().items()):
+            if name == 'self' or value is None:
+                continue
+        return
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        'Processing CustomAction for "%s"' % self.dest
+        print
+        '  parser = %s' % id(parser)
+        print
+        '  values = %r' % values
+        print
+        '  option_string = %r' % option_string
+
+        # Do some arbitrary processing of the input values
+        if isinstance(values, list):
+            values = [v.upper() for v in values]
+        else:
+            values = values.upper()
+        # Save the results in the namespace using the destination
+        # variable given to our constructor.
+        setattr(namespace, self.dest, values)
+
 
 
 if __name__ == "__main__":
