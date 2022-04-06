@@ -134,7 +134,7 @@ def get_dm_model_trainer(config, trainer_args):
             EarlyStopping(monitor="val_loss", mode="min", patience=10),
             RichModelSummary(max_depth=-1)            
         ],
-        gpus=trainer_args.gpus,
+        gpus=[trainer_args.gpus],
         auto_select_gpus=trainer_args.auto_select_gpus,
         min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
         auto_scale_batch_size=trainer_args.auto_scale_batch_size,
@@ -177,9 +177,9 @@ def get_mlflow_dataset_params(config):
     d = config.dataset
 
     mlflow_dataset_params = {
-         "dataset_type" : d.data_type.: "synthetic",
-         "dataset_max_static_amplitude" : d.parameters.amplitde_static_max,
-         "dataset_max_dynamic_amplitude" : d.parameters.amplitde_dynamic_max,
+         "dataset_type" : "synthetic",
+         "dataset_max_static_amplitude" : d.parameters.amplitude_static_max,
+         "dataset_max_dynamic_amplitude" : d.parameters.amplitude_dynamic_max,
          "dataset_n_timeframes" : d.parameters.T,
          "dataset_freq_max" : d.parameters.freq_max,
          "dataset_l_max" : d.parameters.l_max,

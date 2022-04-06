@@ -262,7 +262,8 @@ class Coma4D_C_and_S(torch.nn.Module):
             z_c, z_s = self.mu_c, self.mu_s
 
         s_avg = self.decoder_c(z_c)
-        s_t = self.decoder_s(z_c, z_s)
+        ds_t = self.decoder_s(z_c, z_s)
+        s_t = s_avg.unsqueeze(1) + ds_t
 
         if self._is_variational and self._mode == "training":
             return (self.mu_c, self.log_var_c, self.mu_s, self.log_var_s), s_avg, s_t
