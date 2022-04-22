@@ -97,3 +97,74 @@ class Pool(MessagePassing):
 
     def message(self, x_j, norm):
         return norm.view(1, -1, 1) * x_j
+
+
+
+
+class PhaseTensor1(nn.Module):
+
+    def phase_tensor(self, z, n_timeframes):
+        '''
+        params:
+          z: a batched vector (N x M)
+
+        returns:
+          a phase-aware vector (N x T x 2M)
+        '''
+
+
+        exp_it = []
+
+        for i in range(n_timeframes):
+            phase = 2 * np.pi * i / n_timeframes
+            exp_it.append([np.sin(phase), np.cos(phase)])
+
+        exp_it = np.array(exp_it)
+        exp_it = np.expand_dims(exp_it, axis=(0, 2))
+        exp_it = torch.Tensor(exp_it)
+        exp_it = exp_it.reshape(n_timeframes, 1, 2)
+        exp_it = exp_it.type_as(z)
+
+        # trick to achieve the desired dimensions
+        z = z.reshape(-1, 1, self.z, 1)
+        z_t = torch.matmul(z, exp_it)
+
+        z_t = z_t.reshape(*z_t.shape[:2], -1)
+
+        return z_t
+
+    def forward(self, z):
+        return self.phase_tensor(z)
+
+
+class PhaseTensor2(nn.Module):
+
+    def phase_tensor(self, x):
+        '''
+        params:
+            x: a real-valued Tensor of dimensions [batch_size, n_phases, ...]
+
+        return:
+            real-valued Tensor of twice the last dimension as the input
+        '''
+
+        # x.shape[1] is the number of phases
+
+        phased_x = x.type(torch.complex64)
+        n_timeframes = x.shape[1]
+
+        for t in range(n_timeframes):
+            phase = 2 * np.pi * t / n_timeframes * torch.ones_like(x[:, t, ...])
+            phase = torch.FloatTensor(phase)
+            phase = phase.type_as(x)  # to(x.device)
+
+            # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
+            phased_x[:, t, ...] = torch.polar(x[:, t, ...], phase)
+
+        # concatenate sin and cosine along last dimension
+        phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
+
+        return phased_x
+
+    def forward(self, x):
+        return self.phase_tensor(x)
