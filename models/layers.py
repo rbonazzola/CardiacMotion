@@ -104,7 +104,7 @@ class Pool(MessagePassing):
 
 class PhaseTensor1(nn.Module):
 
-    def phase_tensor(self, z, n_timeframes):
+    def phase_tensor(self, z):
         '''
         params:
           z: a batched vector (N x M)
@@ -115,6 +115,8 @@ class PhaseTensor1(nn.Module):
 
 
         exp_it = []
+
+        n_timeframes = z.shape[1]
 
         for i in range(n_timeframes):
             phase = 2 * np.pi * i / n_timeframes
@@ -150,6 +152,7 @@ class PhaseTensor2(nn.Module):
         '''
 
         # x.shape[1] is the number of phases
+        n_timeframe = x.shape[1]
 
         phased_x = x.type(torch.complex64)
         n_timeframes = x.shape[1]
