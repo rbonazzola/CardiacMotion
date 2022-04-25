@@ -2,8 +2,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
+from .PhaseModule import PhaseTensor
 from IPython import embed
-import numpy as np
 
 class Coma4D_C_and_S(torch.nn.Module):
 
@@ -201,15 +201,18 @@ class Coma4D_C_and_S(torch.nn.Module):
         #TODO: comment this
         #x = x.unsqueeze(1)       
 
-    
-    def decoder_s(self, z_c, z_s):
 
-        z_s_t = self.phase_tensor(z_s)
+    def decoder_s(self, z_c, z_s, n_timeframes):
+
         s_out = []
+
+        phased_z_s = z_s.unsqueeze(1).repeat(1, n_timeframes, *[1 for x in z_s.shape[1:]])
+        phased_z_s = self.phase_tensor(phased_z_s)
 
         for t in range(self.n_timeframes):
            
-            # z_t = z_s_t[:,:,t]
+            z_s_t = phased_z_s[:, t, ...]
+
             x = self.dec_lin_s(torch.cat([z_c, z_s_t], axis=-1))
             x = F.relu(x)
 
@@ -262,7 +265,7 @@ class Coma4D_C_and_S(torch.nn.Module):
             z_c, z_s = self.mu_c, self.mu_s
 
         s_avg = self.decoder_c(z_c)
-        ds_t = self.decoder_s(z_c, z_s)
+        ds_t = self.decoder_s(z_c, z_s, time_frames)
         s_t = s_avg.unsqueeze(1) + ds_t
 
         if self._is_variational and self._mode == "training":
@@ -278,36 +281,3 @@ class AggregatorFunction(nn.Module):
 
     def forward(self, x):
         return self.z_aggregator_function(x)
-
-
-class PhaseTensor(nn.Module):
-
-    def phase_tensor(self, x):
-        '''
-        params:
-            x: a real-valued Tensor of dimensions [batch_size, n_phases, ...]
-
-        return:
-            complex-valued Tensor of the same dimension as the input
-        '''
-
-        # x.shape[1] is the number of phases
-
-        phased_x = x.type(torch.complex64)
-        n_timeframes = x.shape[1]
-
-        for t in range(n_timeframes):
-            phase = 2 * np.pi * t / n_timeframes * torch.ones_like(x[:, t, ...])
-            # phase = torch.FloatTensor(phase)
-            # phase = phase.to(x.device)
-            phase = phase.type_as(x)# to(x.device)
-            # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
-            phased_x[:, t, ...] = torch.polar(x[:, t, ...], phase)
-
-        # concatenate sin and cosine along last dimension
-        # phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
-        return torch.cat((x, x), axis=-1)# phased_x
-
-    def forward(self, x):
-        return self.phase_tensor(x)
-
