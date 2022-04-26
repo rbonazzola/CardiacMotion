@@ -36,7 +36,7 @@ class PhaseTensor(nn.Module):
             sen_t = np.expand_dims(sen_t, axis=dims_to_expand)
             cos_t = np.expand_dims(cos_t, axis=dims_to_expand)
             sen_t = torch.Tensor(sen_t); cos_t = torch.Tensor(cos_t)
-            # sen_t = sen_t.type_as(x); cos_t = cos_t.type_as(x)
+            sen_t = sen_t.type_as(x); cos_t = cos_t.type_as(x)
 
             phased_x = torch.cat((sen_t * x, cos_t * x), dim=-1)
             phased_x.type_as(x)
