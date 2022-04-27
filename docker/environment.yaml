@@ -1,0 +1,24 @@
+name: cardio
+channels:
+  - pytorch
+  - pyg
+  - conda-forge
+  - anaconda
+  - nodefaults
+dependencies:
+  - python=3.9
+  - pytorch=1.10
+  - torchvision
+  - torchaudio
+  - jupyter
+  - pytorch-lightning
+  - mlflow==1.25
+  - pyg
+  - pip
+  - pip: 
+    - vtk 
+    - meshio 
+    - vedo 
+    - trimesh 
+    - pyvista 
+    - icosphere
