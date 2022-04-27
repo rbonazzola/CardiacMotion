@@ -285,6 +285,8 @@ class CoMA(pl.LightningModule):
             local_path=f"moving_mesh_{batch_idx}.gif",
             artifact_path="animations", run_id=self.logger.run_id
         )
+        
+        return 1 # to prevent warning messages
 
 
     # TODO: Select optimizer from menu (dict)
