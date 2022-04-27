@@ -10,7 +10,7 @@ from utils import mesh_operations
 from utils.helpers import *
 from models.model import Coma4D
 from models.model_c_and_s import Coma4D_C_and_S
-from models.coma_ml_module import CoMA
+from models.ComaLightningModule import CoMA
 from torchviz import make_dot
 
 import mlflow.pytorch
