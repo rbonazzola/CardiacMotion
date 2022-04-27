@@ -148,7 +148,7 @@ mlflow_args = {
 CLI_args = {
     ("-c", "--conf",): {
         "help": "Path of a YAML configuration file to be used as a reference configuration.",
-        "default": "config/config_test.yaml",
+        "default": "config_files/config_folded_c_and_s.yaml",
         "dest": "yaml_config_file"
     },
     ** network_architecture_args,
