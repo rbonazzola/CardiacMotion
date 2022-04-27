@@ -296,14 +296,20 @@ class SyntheticMeshPopulation(object):
         plotter = pv.Plotter(notebook=False, off_screen=True)
             
         # Open a gif
-        plotter.open_gif(filename) 
-    
-        kk = pv.PolyData(np.array(mesh4D[0]), connectivity)
+        plotter.open_gif(filename)
+
+        try:
+            # if mesh3D is torch.Tensor, this your should run OK
+            mesh4D = mesh4D.cpu().numpy()
+        except:
+            pass
+
+        kk = pv.PolyData(mesh4D[0], connectivity)
         # plotter.add_mesh(kk, smooth_shading=True, opacity=0.5 )#, show_edges=True)
         plotter.add_mesh(kk, show_edges=show_edges) 
         
         for t, _ in enumerate(mesh4D):
-            kk = pv.PolyData(np.array(mesh4D[t]), connectivity)
+            kk = pv.PolyData(mesh4D[t], connectivity)
             plotter.camera_position = camera_position
             plotter.update_coordinates(kk.points, render=False)
             plotter.render()             
