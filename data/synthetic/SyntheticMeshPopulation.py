@@ -290,7 +290,7 @@ class SyntheticMeshPopulation(object):
         connectivity = np.c_[np.ones(faces.shape[0]) * 3, faces].astype(int)
 
         pv.set_plot_theme("document")
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        os.makedirs(os.path.dirname("./"+filename) , exist_ok=True)
         
         # plotter = pv.Plotter(shape=(1, len(camera_positions)), notebook=False, off_screen=True)
         plotter = pv.Plotter(notebook=False, off_screen=True)
