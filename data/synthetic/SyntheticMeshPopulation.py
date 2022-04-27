@@ -1,16 +1,17 @@
 import os
-import vedo
-import numpy as np
-import trimesh
-from copy import copy
-from scipy.special import sph_harm
-import pyvista as pv
-from IPython import embed
-import re
-import random
 from argparse import Namespace
 import pickle as pkl
+
+import numpy as np
+import random
+from scipy.special import sph_harm
+
 import icosphere
+import pyvista as pv
+import trimesh
+
+from IPython import embed
+import re
 
 class SyntheticMeshPopulation(object):
 
@@ -249,36 +250,45 @@ class SyntheticMeshPopulation(object):
         ::mesh3D:: a sequence of Trimesh mesh objects. 
         ::faces:: array of F x 3 containing the indices of the mesh's triangular faces.
         ::filename:: the name of the output png file. 
-        ::camera_position::
+        ::camera_position:: camera position for pyvista plotter (check relevant docs)
         
         - return:  
         None, only produces the png file. 
         '''
 
+        pv.set_plot_theme("document")
         plotter = pv.Plotter(off_screen=True, notebook=False)
         connectivity = np.c_[np.ones(faces.shape[0]) * 3, faces].astype(int)
 
-        mesh = pv.PolyData(mesh3D.cpu().numpy(), connectivity)
-        plotter.camera_position = camera_position
+        try:
+            # if mesh3D is torch.Tensor, this your should run OK
+            mesh3D = mesh3D.cpu().numpy()
+        except:
+            pass
+
+        mesh = pv.PolyData(mesh3D, connectivity)
         actor = plotter.add_mesh(mesh, show_edges=show_edges)
+        plotter.camera_position = camera_position
         plotter.screenshot(filename if filename.endswith("png") else filename + ".png")
 
 
-    def _generate_gif(self, mesh4D, mesh_connectivity, filename, camera_position='xy', show_edges=False, **kwargs):
+    def _generate_gif(mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
         
         '''
         Produces a gif file representing the motion of the input mesh.
         
         params:
-          mesh4D: a sequence of Trimesh mesh objects.
-          mesh_connectivity: faces in a PyVista-friendly format
-          filename: the name of the output gif file.
-          camera_position:
+          ::mesh4D:: a sequence of Trimesh mesh objects.
+          ::faces:: array of F x 3 containing the indices of the mesh's triangular faces.
+          ::filename:: the name of the output gif file.
+          ::camera_position:: camera position for pyvista plotter (check relevant docs)
           
         return:
           None, only produces the gif file.
         '''
-        
+
+        connectivity = np.c_[np.ones(faces.shape[0]) * 3, faces].astype(int)
+
         pv.set_plot_theme("document")
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         
@@ -288,12 +298,12 @@ class SyntheticMeshPopulation(object):
         # Open a gif
         plotter.open_gif(filename) 
     
-        kk = pv.PolyData(np.array(mesh4D[0]), mesh_connectivity)
+        kk = pv.PolyData(np.array(mesh4D[0]), connectivity)
         # plotter.add_mesh(kk, smooth_shading=True, opacity=0.5 )#, show_edges=True)
         plotter.add_mesh(kk, show_edges=show_edges) 
         
         for t, _ in enumerate(mesh4D):
-            kk = pv.PolyData(np.array(mesh4D[t]), mesh_connectivity)
+            kk = pv.PolyData(np.array(mesh4D[t]), connectivity)
             plotter.camera_position = camera_position
             plotter.update_coordinates(kk.points, render=False)
             plotter.render()             

@@ -4,6 +4,8 @@ import functools
 from argparse import Namespace
 from collections.abc import MutableMapping
 
+CONFIG_FILES_DIR = "config_files"
+
 def rsetattr(obj, attr, val):
     pre, _, post = attr.rpartition('.')
     return setattr(rgetattr(obj, pre) if pre else obj, post, val)
@@ -50,7 +52,7 @@ def unfold_config(token, no_unfolding_for=[]):
             yaml_file = os.path.join(yaml_dir, yaml_file_base)
             token = yaml.safe_load(open(yaml_file))
         except FileNotFoundError:
-            yaml_dir = os.path.join(get_repo_rootdir(), "config")
+            yaml_dir = os.path.join(get_repo_rootdir(), CONFIG_FILES_DIR)
             yaml_file = os.path.join(yaml_dir, yaml_file_base)
             token = yaml.safe_load(open(yaml_file))
 

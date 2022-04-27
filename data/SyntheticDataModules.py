@@ -7,6 +7,8 @@ import pytorch_lightning as pl
 import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
+NUM_WORKERS = 4
+
 def mse(s1, s2):
     return ((s1-s2)**2).sum(-1).mean(-1)
 
@@ -112,15 +114,15 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=8)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=NUM_WORKERS)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=8)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=NUM_WORKERS)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=1, num_workers=8)
+        return DataLoader(self.test_dataset, batch_size=1, num_workers=NUM_WORKERS)
 
     def predict_dataloader(self):
         predict_len = 16 if len(self.test_dataset) >= 16 else len(self.test_dataset)
         predict_dataset = torch.utils.data.Subset(self.test_dataset, range(predict_len))
-        return DataLoader(predict_dataset, batch_size=16, num_workers=8)
+        return DataLoader(predict_dataset, batch_size=16, num_workers=NUM_WORKERS)

@@ -49,6 +49,7 @@ class Coma(torch.nn.Module):
 #       if phase_input:
 #         self.filters.insert(0, 2*num_features)
 #       else:
+
         self.filters.insert(0, num_features)
 
         self.K = polygon_order
@@ -178,7 +179,6 @@ class Coma(torch.nn.Module):
         
         mu = torch.cat(mu)
         mu = mu.reshape(-1, time_frames, self.z)
-        log_var
         mu = self.z_aggr_function(mu)
 
         if self._is_variational and self._mode == "training":
@@ -213,34 +213,6 @@ class Coma4D(Coma):
         # super().__init__(**kwargs)
         # self.dec_lin = torch.nn.Linear(2*self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
 
-
-    def phase_tensor(self, x): 
-
-        '''
-        params:
-            x: a real-valued Tensor of dimensions [batch_size, n_phases, ...]
-
-        return:
-            complex-valued Tensor of the same dimension as the input
-        '''
-
-        # x.shape[1] is the number of phases
-
-        phased_x = x.type(torch.complex64)
-        n_timeframes = x.shape[1]
- 
-        for t in range(n_timeframes):
-            phase = 2 * np.pi * t / n_timeframes * np.ones((x[:, t, ...]).shape)
-            phase = torch.Tensor(phase)
-            phase = phase.to(x.device)
-            # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
-            phased_x[:, t, ...] = torch.polar(x[:, t, ...], phase)
-
-        # concatenate sin and cosine along last dimension
-        phased_x = torch.cat((phased_x.real, phased_x.imag), dim=-1)
-        return phased_x
-
-
     def encoder(self, x):
 
         for i in range(self.n_layers):
@@ -270,14 +242,16 @@ class Coma4D(Coma):
             return mu
 
 
-    def decoder(self, z):
-    
-        z_t = self.phase_tensor(z)
-        
+    def decoder(self, z, n_timeframes):
+
         s_out = []
 
+        phased_z = z_s.unsqueeze(1).repeat(1, n_timeframes, *[1 for x in z_s.shape[1:]])
+        phased_z = self.phase_tensor(phased_z)
+
         for t in range(self.n_timeframes):
-           
+
+            z_t = phased_z[:, t, ...]
             x = self.dec_lin(z_t)
             x = F.relu(x)        
 
@@ -289,12 +263,11 @@ class Coma4D(Coma):
                 x = F.relu(x)
             x = self.pool(x, self.upsample_matrices[0])
             x = self.cheb_dec[-1](x, self.A_edge_index[-1], self.A_norm[-1])
-            
-            #TODO: comment this
-            x = x.unsqueeze(1)
+
+            x = x.unsqueeze(1) # add a component for the time dimension
             s_out.append(x)
 
-        s_out = torch.cat(s_out, dim=1)
+        s_out = torch.cat(s_out, dim=1) # concatenate along the time dimension
         return s_out
 
 
@@ -320,34 +293,3 @@ class Coma4D(Coma):
         x = self.decoder(z)
 
         return (self.mu, self.log_var), x
-
-
-    def phase_embedding(self, z):
-
-        '''
-        params:
-          z: a batched vector (N x M)
-
-        returns:
-          a phase-aware vector (N x T x 2M)
-        '''
-
-        exp_it = []
-
-        for i in range(self.n_timeframes):
-            phase = 2*np.pi*i/self.n_timeframes
-            exp_it.append([np.sin(phase), np.cos(phase)])
-
-        exp_it = np.array(exp_it)
-        exp_it = np.expand_dims(exp_it, axis=(0,2))
-        exp_it = torch.Tensor(exp_it)
-        exp_it = exp_it.reshape(self.n_timeframes, 1, 2)
-        exp_it = exp_it.to(z.device)
-
-        # trick to achieve the desired dimensions
-        z = z.reshape(-1, 1, self.z, 1)
-        z_t = torch.matmul(z,exp_it)
-
-        z_t = z_t.reshape(*z_t.shape[:2], -1)
-
-        return z_t

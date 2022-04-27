@@ -1,6 +1,11 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+
+from PIL import Image
+import imageio
+import numpy as np
+
 from IPython import embed # uncomment for debugging
 from models.model_c_and_s import Coma4D_C_and_S
 from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
@@ -258,22 +263,28 @@ class CoMA(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
 
         s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
-        bottleneck, time_avg_s_hat, shat_t = self(s_t)
+        bottleneck, time_avg_s_hat, s_hat_t = self(s_t)
 
-        SyntheticMeshPopulation.render_mesh_as_png(
-            time_avg_s[0], self.model.template_mesh.f,
-            f"temporal_avg_mesh_{batch_idx}.png")
-        SyntheticMeshPopulation.render_mesh_as_png(
-            time_avg_s_hat[0], self.model.template_mesh.f,
-            f"temporal_avg_mesh_{batch_idx}_rec.png")
+        ### IMAGES OF TEMPORAL AVERAGE
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_orig.png")
+        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+
+        merge_pngs_horizontally(f"temporal_avg_mesh_{batch_idx}_orig.png", f"temporal_avg_mesh_{batch_idx}_rec.png", f"temporal_avg_mesh_{batch_idx}.png")
 
         self.logger.experiment.log_artifact(
             local_path=f"temporal_avg_mesh_{batch_idx}.png",
-            artifact_path="images", run_id=self.logger.run_id)
-        self.logger.experiment.log_artifact(
-            local_path=f"temporal_avg_mesh_{batch_idx}_rec.png",
-            artifact_path="images", run_id=self.logger.run_id)
+            artifact_path="images", run_id=self.logger.run_id
+        )
 
+        ### ANIMATIONS OF MOVING MESH
+        SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
+        SyntheticMeshPopulation._generate_gif(s_hat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+
+        merge_gifs_horizontally(f"moving_mesh_{batch_idx}_orig.gif", f"moving_mesh_{batch_idx}_rec.gif", f"moving_mesh_{batch_idx}.gif")
+        self.logger.experiment.log_artifact(
+            local_path=f"moving_mesh_{batch_idx}.gif",
+            artifact_path="animations", run_id=self.logger.run_id
+        )
 
 
     # TODO: Select optimizer from menu (dict)
@@ -287,5 +298,35 @@ class CoMA(pl.LightningModule):
         return optimizer
 
 
-# class CoMA_C_and_S(CoMA):
+def merge_pngs_horizontally(png1, png2, output_png):
+    # https://www.tutorialspoint.com/python_pillow/Python_pillow_merging_images.htm
+    #Read the two images
+    image1 = Image.open(png1)
+    image2 = Image.open(png2)
+    #resize, first image
+    image1_size = image1.size
+    # image2_size = image2.size
+    new_image = Image.new('RGB',(2*image1_size[0], image1_size[1]), (250,250,250))
+    new_image.paste(image1,(0,0))
+    new_image.paste(image2,(image1_size[0],0))
+    new_image.save(output_png, "PNG")
 
+def merge_gifs_horizontally(gif_file1, gif_file2, output_file):
+
+    #Create reader object for the gif
+    gif1 = imageio.get_reader(gif_file1)
+    gif2 = imageio.get_reader(gif_file2)
+
+    #Create writer object
+    new_gif = imageio.get_writer(output_file)
+
+    for frame_number in range(gif1.get_length()):
+        img1 = gif1.get_next_data()
+        img2 = gif2.get_next_data()
+        #here is the magic
+        new_image = np.hstack((img1, img2))
+        new_gif.append_data(new_image)
+
+    gif1.close()
+    gif2.close()
+    new_gif.close()
