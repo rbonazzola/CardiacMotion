@@ -300,7 +300,7 @@ class SyntheticMeshPopulation(object):
 
         try:
             # if mesh3D is torch.Tensor, this your should run OK
-            mesh4D = mesh4D.cpu().numpy()
+            mesh4D = mesh4D.cpu().numpy()[0]
         except:
             pass
 
@@ -316,6 +316,7 @@ class SyntheticMeshPopulation(object):
             plotter.write_frame()
         
         plotter.close()
+        return 1 # to prevent warnings
         
         
     def generate_gif_population(self, N_gifs=10, camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
