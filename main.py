@@ -79,6 +79,8 @@ def get_coma_args(config, dm):
         "latent_dim_style": net.latent_dim_s,
         "is_variational": config.loss.regularization.weight != 0,
         "mode": "testing",
+        "n_timeframes": config.dataset.parameters.T, 
+        "phase_input": net.phase_input,
         "z_aggr_function": net.z_aggr_function
     }
 
