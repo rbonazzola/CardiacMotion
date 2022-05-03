@@ -193,7 +193,7 @@ def get_mlflow_dataset_params(config):
          "dataset_n_timeframes" : d.parameters.T,
          "dataset_freq_max" : d.parameters.freq_max,
          "dataset_l_max" : d.parameters.l_max,
-         "dataset_resolution": d.parameters.resolution,
+         "dataset_resolution": d.parameters.mesh_resolution,
          "dataset_complexity_c": (d.parameters.l_max + 1) ** 2,
          "dataset_complexity_s": ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max,
          "dataset_complexity": ((d.parameters.l_max + 1) ** 2) * (d.parameters.freq_max + 1),
