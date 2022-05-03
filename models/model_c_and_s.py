@@ -143,20 +143,22 @@ class Coma4D_C_and_S(torch.nn.Module):
         torch.nn.init.normal_(self.dec_lin_s.weight, 0, 0.1)
 
     def encoder(self, x):
-    
+
+        self.n_timeframes = x.shape[1]
+
         for i in range(self.n_layers):
             x = self.cheb_enc[i](x, self.A_edge_index[i], self.A_norm[i])
             x = F.relu(x)
             x = self.pool(x, self.downsample_matrices[i])
-    
-        self.n_timeframes = x.shape[1]
-        x = x.reshape(x.shape[0], self.n_timeframes, self._n_features_before_z)
+
+
+        x = self.concatenate_graph_features(x)
                
         mu_c, log_var_c = [], []
         mu_s, log_var_s = [], []
 
         # Iterate through time points
-        for i in range(x.shape[1]):
+        for i in range(self.n_timeframes):
             mu = self.enc_lin_mu(x[:,i,:])
             mu_c.append(mu[:,:self.z_c])
             mu_s.append(mu[:,self.z_c:])
@@ -209,7 +211,7 @@ class Coma4D_C_and_S(torch.nn.Module):
         phased_z_s = z_s.unsqueeze(1).repeat(1, n_timeframes, *[1 for x in z_s.shape[1:]])
         phased_z_s = self.phase_tensor(phased_z_s)
 
-        for t in range(self.n_timeframes):
+        for t in range(n_timeframes):
            
             z_s_t = phased_z_s[:, t, ...]
 
@@ -231,6 +233,12 @@ class Coma4D_C_and_S(torch.nn.Module):
 
         s_out = torch.cat(s_out, dim=1)
         return s_out
+
+
+    def concatenate_graph_features(self, x):
+        x = x.reshape(x.shape[0], self.n_timeframes, self._n_features_before_z)
+        return x
+
 
     def _sample(self, mu, log_var):
         std = torch.exp(0.5*log_var)
