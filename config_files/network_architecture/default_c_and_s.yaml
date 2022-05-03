@@ -1,12 +1,13 @@
 {  
   phase_input: true,
-  latent_dim_c: 8,
-  latent_dim_s: 8,
+  latent_dim_c: 4,
+  latent_dim_s: 4,
   n_features: 3,
+  z_aggr_function: "FCN",
   convolution: { 
-    channels_enc: 16 32 64 128,
-    channels_dec_c: 16 32 64 128,
-    channels_dec_s: 16 32 64 128,
+    channels_enc: 16 16 32 32,
+    channels_dec_c: 16 16 32 32,
+    channels_dec_s: 16 16 32 32,
     type: "Chebyshev",
     parameters: {        
       polynomial_degree: 6 6 6 6,
