@@ -4,7 +4,6 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping 
 from pytorch_lightning.callbacks import RichModelSummary
 
-
 from IPython import embed
 from utils import mesh_operations
 from utils.helpers import *
@@ -27,8 +26,8 @@ import argparse
 import pprint
 
 def get_coma_matrices(config, dm, cache=True, from_cached=True):
-    '''
 
+    '''
     :param config: configuration Namespace, with a list called "network_architecture.pooling.parameters.downsampling_factors" as attribute.
     :param dm: a PyTorch Lightning datamodule, with attributes train_dataset.dataset.mesh_popu and train_dataset.dataset.mesh_popu.template
     :param cache: if True, will cache the matrices in a pkl file, unless this file already exists.
@@ -89,8 +88,9 @@ def get_coma_args(config, dm):
 
 def get_datamodule(config):
 
-    #with open(config.dataset.cached_file, "rb") as ff:
-    #    data = pkl.load(ff)
+    '''
+
+    '''
 
     # TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS
     if config.dataset.data_type.startswith("cardiac"):

@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
 from .PhaseModule import PhaseTensor
 from IPython import embed
+from torch.fft import rfft
+from typing import Union, Callable
 
 class Coma4D_C_and_S(torch.nn.Module):
 
@@ -22,9 +24,10 @@ class Coma4D_C_and_S(torch.nn.Module):
           adjacency_matrices,
           template,
           n_nodes,
-          mode="testing",
-          phase_input=True,
-          z_aggr_function=lambda x: torch.Tensor.mean(x, axis=1)
+          z_aggr_function,
+          phase_input,
+          n_timeframes=None,
+          mode="testing"
     	):
         
         super(Coma4D_C_and_S, self).__init__()
@@ -89,7 +92,15 @@ class Coma4D_C_and_S(torch.nn.Module):
             )
     
         self.phase_tensor = PhaseTensor()
-        self.z_aggr_function = AggregatorFunction(z_aggr_function)
+
+        if z_aggr_function == "mean":
+            self.z_aggr_function = Mean_Aggregator()
+        elif z_aggr_function.lower() == "fcn" or z_aggr_function.lower() == "fully_connected":
+            self.n_timeframes = n_timeframes
+            self.z_aggr_function = FCN_Aggregator(features_in=n_timeframes*(self.z_c + self.z_s), features_out=(self.z_c + self.z_s))
+        elif z_aggr_function.lower() == "dft" or z_aggr_function.lower() == "discrete_fourier_transform":
+            self.z_aggr_function = DFT_Aggregator()
+
         self.reset_parameters()
 
 
@@ -281,11 +292,38 @@ class Coma4D_C_and_S(torch.nn.Module):
         else:
             return (self.mu_c, None, self.mu_s, None), s_avg, s_t
 
-class AggregatorFunction(nn.Module):
 
-    def __init__(self, f):
-        super(AggregatorFunction, self).__init__()
-        self.z_aggregator_function = f
+class Mean_Aggregator(nn.Module):
 
     def forward(self, x):
-        return self.z_aggregator_function(x)
+        return torch.Tensor.mean(x, axis=1)
+
+
+class FCN_Aggregator(nn.Module):
+
+    def __init__(self, features_in, features_out):
+        super(FCN_Aggregator, self).__init__()
+        self.fcn = torch.nn.Linear(features_in, features_out)
+
+    def forward(self, x):
+        x = x.reshape(x.shape[0], x.shape[2], x.shape[1] * x.shape[3])
+        return self.fcn(x)
+
+
+class DFT_Aggregator(nn.Module):
+
+    '''
+      x [N, T, ..., F] -> [N, ..., n_comps * F]
+    '''
+
+    def __init__(self, n_time_coords=None):
+        super(DFT_Aggregator, self).__init__()
+        self.n_time_coords = n_time_coords
+
+    def forward(self, x):
+
+        x = rfft(x, dim=1)
+        # Concatenate features in the frequency domain
+        x = x.reshape(x.shape[0], x.shape[2], x.shape[1] * x.shape[3])
+        x = torch.cat((dft_agg(x).real, dft_agg(x).imag), dim=-1)
+        return x
