@@ -165,34 +165,29 @@ class Coma4D_C_and_S(torch.nn.Module):
 
         x = self.concatenate_graph_features(x)
                
-        mu_c, log_var_c = [], []
-        mu_s, log_var_s = [], []
+        mu, log_var = [], []
 
         # Iterate through time points
         for i in range(self.n_timeframes):
-            mu = self.enc_lin_mu(x[:,i,:])
-            mu_c.append(mu[:,:self.z_c])
-            mu_s.append(mu[:,self.z_c:])
+            _mu = self.enc_lin_mu(x[:,i,:])
+            mu.append(_mu)
             
             if self._is_variational and self._mode == "training":
                 log_var = self.enc_lin_var(x[:,i,:])
-                log_var_c.append(log_var[:,:self.z_c])
-                log_var_s.append(log_var[:,self.z_c:])
-        
-        mu_c, mu_s = torch.cat(mu_c), torch.cat(mu_s)
-        mu_c = mu_c.reshape(-1, self.n_timeframes, self.z_c)
-        mu_c = self.z_aggr_function(mu_c)
-        mu_s = mu_s.reshape(-1, self.n_timeframes, self.z_s)
-        mu_s = self.z_aggr_function(mu_s)
+                log_var.append(_log_var)
+
+        mu = torch.cat(mu)
+        mu = mu.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
+        mu = self.z_aggr_function(mu)
+        mu_c = mu[:,:self.z_c]
+        mu_s = mu[:,self.z_c:]
 
         if self._is_variational and self._mode == "training":
-            log_var_c = torch.cat(log_var_c)
-            log_var_c = log_var_c.reshape(-1, self.n_timeframes, self.z_c)
-            log_var_c = self.z_aggr_function(log_var_c)
-
-            log_var_s = torch.cat(log_var_s)
-            log_var_s = log_var_s.reshape(-1, self.n_timeframes, self.z_s)
-            log_var_s = self.z_aggr_function(log_var_s)
+            log_var = torch.cat(log_var)
+            log_var = log_var.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
+            log_var = self.z_aggr_function(log_var)
+            log_var_c = log_var[:, :self.z_c]
+            log_var_s = log_var[:, self.z_c:]
 
             return mu_c, log_var_c, mu_s, log_var_s
 
