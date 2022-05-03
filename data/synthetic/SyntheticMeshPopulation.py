@@ -9,6 +9,7 @@ from scipy.special import sph_harm
 import icosphere
 import pyvista as pv
 import trimesh
+from tqdm import tqdm
 
 from IPython import embed
 import re
@@ -137,9 +138,10 @@ class SyntheticMeshPopulation(object):
     
         if self.params.random_seed is not None:
             random.seed(self.params.random_seed)
-    
+
+        #TODO: change this into a generator
         # Loop through individuals
-        for i in range(self.params.N):
+        for i in tqdm(range(self.params.N)):
     
             if self._verbose and (i % 100) == 0: print(i)
     
