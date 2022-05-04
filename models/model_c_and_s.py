@@ -260,9 +260,8 @@ class Coma4D_C_and_S(torch.nn.Module):
         time_frames = x.shape[1]
         
         if self.phase_input:
-            x = self.phase_tensor(x)
-                
-        x = x.reshape(batch_size, time_frames, -1, 2*self.filters_enc[0])
+            x = self.phase_tensor(x)       
+            x = x.reshape(batch_size, time_frames, -1, 2*self.filters_enc[0])
         
         if self._is_variational and self._mode == "training":            
             
