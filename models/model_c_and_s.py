@@ -183,9 +183,9 @@ class Coma4D_C_and_S(torch.nn.Module):
         mu_s = mu[:,self.z_c:]
 
         if self._is_variational and self._mode == "training":
-            log_var = torch.cat(log_var)
-            log_var = log_var.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
-            log_var = self.z_aggr_function(log_var)
+            log_var_t = torch.cat(log_var)
+            log_var_t = log_var_t.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
+            log_var = self.z_aggr_function(log_var_t)
             log_var_c = log_var[:, :self.z_c]
             log_var_s = log_var[:, self.z_c:]
 
