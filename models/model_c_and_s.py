@@ -196,7 +196,6 @@ class Coma4D_C_and_S(torch.nn.Module):
 
     def decoder_c(self, z_c):
         
-        embed()
         x = self.dec_lin_c(z_c)
         x = x.reshape(x.shape[0], -1, self.cheb_dec_c[0].in_channels)
         for i in range(self.n_layers-1):
@@ -302,7 +301,7 @@ class FCN_Aggregator(nn.Module):
         self.fcn = torch.nn.Linear(features_in, features_out)
 
     def forward(self, x):
-        x = x.reshape(x.shape[0], x.shape[2], x.shape[1] * x.shape[3])
+        x = x.reshape(x.shape[0], x.shape[1] * x.shape[2])
         return self.fcn(x)
 
 
