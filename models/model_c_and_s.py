@@ -106,7 +106,10 @@ class Coma4D_C_and_S(torch.nn.Module):
 
     def _build_encoder(self, n_filters, K):
         # Chebyshev convolutions (encoder)
-        cheb_enc = torch.nn.ModuleList([ ChebConv_Coma(   2*n_filters[0],  n_filters[1],  K[0])])
+        if self.phase_input:
+            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(2 * n_filters[0], n_filters[1], K[0])])
+        else:
+            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(n_filters[0], n_filters[1], K[0])])
         cheb_enc.extend([
             ChebConv_Coma(
                 n_filters[i],
