@@ -266,8 +266,14 @@ class CoMA(pl.LightningModule):
         bottleneck, time_avg_s_hat, s_hat_t = self(s_t)
 
         ### IMAGES OF TEMPORAL AVERAGE
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_orig.png")
-        SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+        if self.params.dataset.center_around_mean:
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0]+self.model.template_mesh.v, self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_orig.png")
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0]+self.model.template_mesh.v, self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+        else:
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f,
+                                                       f"temporal_avg_mesh_{batch_idx}_orig.png")
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f,
+                                                       f"temporal_avg_mesh_{batch_idx}_rec.png")
 
         merge_pngs_horizontally(f"temporal_avg_mesh_{batch_idx}_orig.png", f"temporal_avg_mesh_{batch_idx}_rec.png", f"temporal_avg_mesh_{batch_idx}.png")
 
@@ -277,8 +283,12 @@ class CoMA(pl.LightningModule):
         )
 
         ### ANIMATIONS OF MOVING MESH
-        SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
-        SyntheticMeshPopulation._generate_gif(s_hat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+        if self.params.dataset.center_around_mean:
+            SyntheticMeshPopulation._generate_gif(s_t+self.model.template_mesh.v, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
+            SyntheticMeshPopulation._generate_gif(s_hat_t + self.model.template_mesh.v, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+        else:
+            SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
+            SyntheticMeshPopulation._generate_gif(s_hat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
 
         merge_gifs_horizontally(f"moving_mesh_{batch_idx}_orig.gif", f"moving_mesh_{batch_idx}_rec.gif", f"moving_mesh_{batch_idx}.gif")
         self.logger.experiment.log_artifact(
