@@ -99,7 +99,7 @@ class Coma4D_C_and_S(torch.nn.Module):
             self.z_aggr_function = FCN_Aggregator(features_in=n_timeframes*(self.z_c + self.z_s), features_out=(self.z_c + self.z_s))
         elif z_aggr_function.lower() == "dft" or z_aggr_function.lower() == "discrete_fourier_transform":
             self.n_timeframes = n_timeframes
-            self.z_aggr_function = DFT_Aggregator(features_in=(n_timeframes+2)*(self.z_c + self.z_s), features_out=(self.z_c + self.z_s))
+            self.z_aggr_function = DFT_Aggregator(features_in=(n_timeframes//2+1)*2*(self.z_c + self.z_s), features_out=(self.z_c + self.z_s))
 
         self.reset_parameters()
 
