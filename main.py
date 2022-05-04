@@ -164,6 +164,7 @@ def get_mlflow_parameters(config):
     net_params = {
         "latent_dim_s": net.latent_dim_s,
         "latent_dim_c": net.latent_dim_c,
+        "z_aggr_function": net.z_aggr_function,
         "convolution_type": net.convolution.type,
         "n_channels_enc": net.convolution.channels_enc,
         "n_channels_dec_c": net.convolution.channels_dec_c,
