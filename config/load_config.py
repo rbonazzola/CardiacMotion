@@ -155,7 +155,7 @@ def load_yaml_config(yaml_config_file):
     if hasattr(config.network_architecture, "activation_function"):
       config.network_architecture.activation_function = \
       [x for x in config.network_architecture.activation_function.split()]
-
+    
     sanity_check(config)
 
     return config

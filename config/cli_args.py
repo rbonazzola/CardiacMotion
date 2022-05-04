@@ -66,6 +66,12 @@ network_architecture_args = {
         "nargs": "+", "type": int,
         "action": ArgumentAction,
         "dest": "config.network_architecture.convolution.parameters.polynomial_degree"},
+    ("--z_aggr_function",): {
+        "help": "Temporal aggregation method",
+        "type": str,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.z_aggr_function"},
+
     #("--phase_input" ): {
     #    "help": "If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
     #    "default": True,
@@ -89,6 +95,49 @@ loss_args = {
         "dest": "config.loss.reconstruction_s.weight",
         "type": float,
         "action": ArgumentAction},
+}
+
+dataset_args = {
+    ("--dataset.amplitude_static_max",): {
+        "help": "" ,
+        "dest": "config.dataset.parameters.amplitude_static_max" , 
+        "type": float,
+        "action": ArgumentAction},
+    ("--dataset.amplitude_dynamic_max",): {
+        "help": "",
+        "dest": "config.dataset.parameters.amplitude_dynamic_max" , 
+        "type": float,
+        "action": ArgumentAction},
+    ("--dataset.N_subjects",): {
+        "help": "",
+        "dest": "config.dataset.parameters.N" , 
+        "type": int,
+        "action": ArgumentAction},
+    ("--dataset.N_timeframes",): {
+        "help": "",
+        "dest": "config.dataset.parameters.T" , 
+        "type": int,
+        "action": ArgumentAction},
+    ("--dataset.freq_max",): {
+        "help": "",
+        "dest": "config.dataset.parameters.freq_max" , 
+        "type": int,
+        "action": ArgumentAction},
+    ("--dataset.l_max",): {
+        "help": "",
+        "dest": "config.dataset.parameters.l_max" , 
+        "type": int,
+        "action": ArgumentAction},
+    ("--dataset.mesh_resolution",): {
+        "help": "",
+        "dest": "config.dataset.parameters.mesh_resolution" , 
+        "type": int,
+        "action": ArgumentAction},
+    ("--dataset.center_around_mean",): {
+        "help": "Not working! Always sets this value to True.",
+        "dest": "config.dataset.preprocessing.center_around_mean" , 
+        "type": bool,
+        "action": ArgumentAction}
 }
 
 training_args = {
@@ -154,6 +203,7 @@ CLI_args = {
     ** network_architecture_args,
     ** loss_args,
     ** training_args,
+    ** dataset_args,
     ** mlflow_args,
     ("--show_config",): {
         "default": False,
