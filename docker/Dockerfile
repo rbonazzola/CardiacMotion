@@ -74,6 +74,8 @@ RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}
 RUN pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 # Install vtk and others
 RUN pip install vtk meshio vedo trimesh pyvista icosphere 
+RUN pip install surgeon_pytorch
+
 # Install psbody-mesh
 WORKDIR /home/user
 RUN git clone https://github.com/MPI-IS/mesh.git
