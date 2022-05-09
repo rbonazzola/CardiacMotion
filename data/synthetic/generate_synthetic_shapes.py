@@ -25,6 +25,7 @@ if __name__ == "__main__":
 
     params = json.load(open("config.json")); 
     popu = SyntheticMeshPopulation(**params, from_cache_if_exists=False)
-    popu.generate_gif_population(show_edges=False)    
+    # popu.generate_gif_population(show_edges=False)    
+    popu.generate_gif_population()    
 
     main(params, ofile, args.generate_gif)

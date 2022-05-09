@@ -274,7 +274,7 @@ class SyntheticMeshPopulation(object):
         plotter.screenshot(filename if filename.endswith("png") else filename + ".png")
 
 
-    def _generate_gif(mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
+    def _generate_gif(self, mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
         
         '''
         Produces a gif file representing the motion of the input mesh.
@@ -320,7 +320,7 @@ class SyntheticMeshPopulation(object):
         plotter.close()
 
         
-    def generate_gif_population(self, N_gifs=10, camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
+    def generate_gif_population(self, N_gifs=3, camera_positions=['xy', 'yz', 'xz'], verbose=False, **kwargs):
         
         '''
           population: population of moving meshes.
@@ -328,7 +328,7 @@ class SyntheticMeshPopulation(object):
         
         '''
         conn = self.template.faces
-        conn = np.c_[3 * np.ones(conn.shape[0]), conn].astype(int)  # add column of 3 to make it PyVista-compatible
+        # conn = np.c_[3 * np.ones(conn.shape[0]), conn].astype(int)  # add column of 3 to make it PyVista-compatible
         
         for i, moving_mesh in enumerate(self.moving_meshes):
             if verbose: print(i)
