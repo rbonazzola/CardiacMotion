@@ -164,8 +164,6 @@ class Coma4D_C_and_S(torch.nn.Module):
             x = self.cheb_enc[i](x, self.A_edge_index[i], self.A_norm[i])
             x = F.relu(x)
             x = self.pool(x, self.downsample_matrices[i])
-
-
         x = self.concatenate_graph_features(x)
                
         mu, log_var = [], []
@@ -325,3 +323,17 @@ class DFT_Aggregator(nn.Module):
         x = torch.cat((x.real, x.imag), dim=-1)
         x = self.fcn(x) 
         return x
+
+class Encoder3DMesh(nn.Module):
+
+    def __init__(self):
+        
+
+
+class StyleDecoder(nn.Module):
+
+    def __init__(self):
+
+        super()
+
+        self.layers =
