@@ -35,7 +35,7 @@ class Coma4D_C_and_S(torch.nn.Module):
         self.n_nodes = n_nodes
         self.n_layers = n_layers
 
-        self.phase_input = phase_input        
+        self.phase_input = phase_input
 
         self.filters_enc = num_conv_filters_enc
         self.filters_dec_c = num_conv_filters_dec_c
@@ -286,6 +286,7 @@ class Encoder3DMesh(nn.Module):
 
     def __init__(self, **kwargs):
 
+        self.phase_input = phase_input
         self.filters_enc = num_conv_filters_enc
         self.filters_enc.insert(0, num_features)
         self.K = polygon_order
@@ -294,6 +295,7 @@ class Encoder3DMesh(nn.Module):
 
         self.z_c = latent_dim_content
         self.z_s = latent_dim_style
+
         self.downsample_matrices = downsample_matrices
         self.A_edge_index, self.A_norm = self._build_adj_matrix()
         self.cheb_enc = self._build_encoder(self.filters_enc, self.K)

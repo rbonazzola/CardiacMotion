@@ -34,8 +34,6 @@ class CoMA(pl.LightningModule):
         self.model = model
         self.params = params
 
-        # TOFIX: decide it from parameters
-
         self.rec_loss = self.get_rec_loss()
 
 
@@ -159,8 +157,6 @@ class CoMA(pl.LightningModule):
         else:
             loss = recon_loss
             kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(loss)
-            # kld_loss_c = torch.zeros_like(loss)
-            # kld_loss_s = torch.zeros_like(loss)
 
         rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
         rec_ratio_to_pop_mean = mse(s_t, shat_t) / mse_mesh_to_pop_mean
@@ -175,15 +171,18 @@ class CoMA(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
 
+        # loss_dict = self._shared_eval_step(batch, batch_idx)
+        # loss_dict = { "val_"+k: v for k, v in loss_dict.items() }
+
         loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
-        
+
         loss_dict = {
-          "val_kld_loss": kld_loss, 
+          "val_kld_loss": kld_loss,
           "val_recon_loss": recon_loss,
           "val_recon_loss_c": recon_loss_c,
           "val_recon_loss_s": recon_loss_s,
-          "val_loss": loss, 
-          "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean, 
+          "val_loss": loss,
+          "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
           "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
