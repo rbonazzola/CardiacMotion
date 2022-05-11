@@ -3,8 +3,8 @@ from torch import nn
 import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
 from .PhaseModule import PhaseTensor
+from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
 from IPython import embed
-from torch.fft import rfft
 from typing import Union, Callable
 
 class Coma4D_C_and_S(torch.nn.Module):
@@ -60,15 +60,6 @@ class Coma4D_C_and_S(torch.nn.Module):
         self._is_variational = is_variational
         
         self.A_edge_index, self.A_norm = self._build_adj_matrix()
-
-        #if self.filters_enc is None:
-        #    self.filters_enc = self.filters
-
-        #if self.filters_c is None:
-        #    self.filters_c = self.filters_enc
-
-        #if self.filters_s is None:
-        #    self.filters_s = self.filters_enc
 
         self.cheb_enc = self._build_encoder(self.filters_enc, self.K)
         self.cheb_dec_c = self._build_decoder(self.filters_dec_c, self.K)
@@ -288,46 +279,121 @@ class Coma4D_C_and_S(torch.nn.Module):
             return (self.mu_c, None, self.mu_s, None), s_avg, s_t
 
 
-class Mean_Aggregator(nn.Module):
-
-    def forward(self, x):
-        return torch.Tensor.mean(x, axis=1)
-
-
-class FCN_Aggregator(nn.Module):
-
-    def __init__(self, features_in, features_out):
-        super(FCN_Aggregator, self).__init__()
-        self.fcn = torch.nn.Linear(features_in, features_out)
-
-    def forward(self, x):
-        x = x.reshape(x.shape[0], x.shape[1] * x.shape[2])
-        return self.fcn(x)
-
-
-class DFT_Aggregator(nn.Module):
-
-    '''
-      x [N, T, ..., F] -> [N, ..., n_comps * F]
-    '''
-
-    def __init__(self, features_in, features_out):
-        super(DFT_Aggregator, self).__init__()
-        self.fcn = torch.nn.Linear(features_in, features_out)
-
-    def forward(self, x):
-
-        x = rfft(x, dim=1)
-        # Concatenate features in the frequency domain
-        x = x.reshape(x.shape[0], x.shape[1] * x.shape[2])
-        x = torch.cat((x.real, x.imag), dim=-1)
-        x = self.fcn(x) 
-        return x
-
 class Encoder3DMesh(nn.Module):
 
-    def __init__(self):
-        
+    '''
+    '''
+
+    def __init__(self, **kwargs):
+
+        self.filters_enc = num_conv_filters_enc
+        self.filters_enc.insert(0, num_features)
+        self.K = polygon_order
+
+        self._is_variational = is_variational
+
+        self.z_c = latent_dim_content
+        self.z_s = latent_dim_style
+        self.downsample_matrices = downsample_matrices
+        self.A_edge_index, self.A_norm = self._build_adj_matrix()
+        self.cheb_enc = self._build_encoder(self.filters_enc, self.K)
+        self.pool = Pool()
+
+        # Fully connected layers connecting the last pooling layer and the latent space layer.
+        self.enc_lin_mu = torch.nn.Linear(self._n_features_before_z, self.z_c + self.z_s)
+
+        if self._is_variational:
+            self.enc_lin_var = torch.nn.Linear(self._n_features_before_z, self.z_c + self.z_s)
+
+
+    def _build_encoder(self, n_filters, K):
+        # Chebyshev convolutions (encoder)
+        if self.phase_input:
+            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(2 * n_filters[0], n_filters[1], K[0])])
+        else:
+            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(n_filters[0], n_filters[1], K[0])])
+        cheb_enc.extend([
+            ChebConv_Coma(
+                n_filters[i],
+                n_filters[i+1],
+                K[i]
+            ) for i in range(1, len(n_filters)-1)
+        ])
+        return cheb_enc
+
+
+    def _build_adj_matrix(self):
+        adj_edge_index, adj_norm = zip(*[
+            ChebConv_Coma.norm(self.adjacency_matrices[i]._indices(), self.n_nodes[i])
+            for i in range(len(self.n_nodes))
+        ])
+        return list(adj_edge_index), list(adj_norm)
+
+
+    def encoder(self, x):
+
+        self.n_timeframes = x.shape[1]
+
+        for i in range(self.n_layers):
+            x = self.cheb_enc[i](x, self.A_edge_index[i], self.A_norm[i])
+            x = F.relu(x)
+            x = self.pool(x, self.downsample_matrices[i])
+        x = self.concatenate_graph_features(x)
+
+        mu, log_var = [], []
+
+        # Iterate through time points
+        for i in range(self.n_timeframes):
+            _mu = self.enc_lin_mu(x[:, i, :])
+            mu.append(_mu)
+
+            if self._is_variational and self._mode == "training":
+                log_var = self.enc_lin_var(x[:, i, :])
+                log_var.append(_log_var)
+
+        mu = torch.cat(mu)
+        mu = mu.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
+        mu = self.z_aggr_function(mu)
+        mu_c = mu[:, :self.z_c]
+        mu_s = mu[:, self.z_c:]
+
+        if self._is_variational and self._mode == "training":
+            log_var_t = torch.cat(log_var)
+            log_var_t = log_var_t.reshape(-1, self.n_timeframes, self.z_c + self.z_s)
+            log_var = self.z_aggr_function(log_var_t)
+            log_var_c = log_var[:, :self.z_c]
+            log_var_s = log_var[:, self.z_c:]
+
+            return mu_c, log_var_c, mu_s, log_var_s
+
+        return mu_c, mu_s
+
+
+    def forward(self, x):
+
+        batch_size = x.shape[0]
+        time_frames = x.shape[1]
+
+        if self.phase_input:
+            x = self.phase_tensor(x)
+            x = x.reshape(batch_size, time_frames, -1, 2 * self.filters_enc[0])
+
+        if self._is_variational and self._mode == "training":
+
+            self.mu_c, self.log_var_c, self.mu_s, self.log_var_s = self.encoder(x)
+            z_c = self._sample(self.mu_c, self.log_var_c)
+            z_s = self._sample(self.mu_s, self.log_var_s)
+
+            if torch.isinf(z_c).any():
+                self.mu_c, self.log_var_c = self.mu_c / 1000, self.log_var_c / 1000
+                z_c = self._sample(self.mu_c, self.log_var_c)
+
+            if torch.isinf(z_s).any():
+                self.mu_s, self.log_var_s = self.mu_s / 1000, self.log_var_s / 1000
+                z_s = self._sample(self.mu_s, self.log_var_s)
+        else:
+            self.mu_c, self.mu_s = self.encoder(x)
+            z_c, z_s = self.mu_c, self.mu_s
 
 
 class StyleDecoder(nn.Module):
