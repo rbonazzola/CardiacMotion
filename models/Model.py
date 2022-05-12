@@ -1,3 +1,8 @@
+import torch
+from torch import nn
+import numpy as np
+from typing import Sequence, Union
+
 class Coma4D_C_and_S(torch.nn.Module):
 
     def __init__(self,
@@ -61,7 +66,7 @@ class EncoderTemporalSequence(nn.Module):
     def _get_z_aggr_function(self, z_aggr_function):
 
         if z_aggr_function == "mean":
-            z_aggr_function Mean_Aggregator()
+            z_aggr_function = Mean_Aggregator()
 
         elif z_aggr_function.lower() == "fcn" or z_aggr_function.lower() == "fully_connected":
             self.n_timeframes = n_timeframes
@@ -129,7 +134,15 @@ class Encoder3DMesh(nn.Module):
     '''
     '''
 
-    def __init__(self, **kwargs):
+    def __init__(self,
+        phase_input: bool,
+        num_conv_filters_enc: Sequence[int], num_features: int,
+        polygon_order: int,
+        is_variational: bool,
+        latent_dim_content: int, latent_dim_style: int,
+        adjacency_matrices,
+        downsample_matrices,
+        activation_layers):
 
         self.phase_input = phase_input
         self.filters_enc = num_conv_filters_enc
