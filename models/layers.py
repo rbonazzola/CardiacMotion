@@ -86,12 +86,22 @@ class ChebConv_Coma(ChebConv):
 
 
 class Pool(MessagePassing):
-    def __init__(self):
+    '''
+    This module can be used in two ways:
+      - Provide a pool matrix on initialization.
+      - Initialize it generically, and provide the pool matrix when calling the forward method.
+    '''
+
+    def __init__(self, pool_mat=None):
         # source_to_target is the default value for flow, but is specified here for explicitness
+        self.pool_mat = pool_mat.transpose(0, 1)
         super(Pool, self).__init__(flow='source_to_target')
 
-    def forward(self, x, pool_mat,  dtype=None):
-        pool_mat = pool_mat.transpose(0, 1)
+    def forward(self, x, pool_mat=None,  dtype=None):
+        if self.pool_mat is None:
+            pool_mat = pool_mat.transpose(0, 1)
+        else:
+            pool_mat = self.pool_mat
         out = self.propagate(edge_index=pool_mat._indices(), x=x, norm=pool_mat._values(), size=pool_mat.size())
         return out
 
