@@ -63,7 +63,8 @@ class Encoder3DMesh(nn.Module):
 
     def __init__(self,
         phase_input: bool,
-        num_conv_filters_enc: Sequence[int], num_features: int,
+        num_conv_filters_enc: Sequence[int],
+        num_features: int,
         polygon_order: int,
         n_layers: int,
         n_nodes: int,
