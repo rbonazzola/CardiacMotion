@@ -7,8 +7,8 @@ import imageio
 import numpy as np
 
 from IPython import embed # uncomment for debugging
-from models.model_c_and_s import Coma4D_C_and_S
-from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
+# from models.Model4D import  EncoderTemporalSequence
+# from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -30,7 +30,7 @@ class CineComaEncoder(pl.LightningModule):
         :param params: a Namespace with additional parameters
         """
 
-        super(CoMA, self).__init__()
+        super(CineComaEncoder, self).__init__()
         self.model = model
         self.params = params
 
@@ -52,7 +52,7 @@ class CineComaEncoder(pl.LightningModule):
 
         for i, _ in enumerate(self.model.downsample_matrices):
             self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
-            self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
+            # self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
             self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
 
         for i, _ in enumerate(self.model.A_edge_index):
@@ -72,7 +72,10 @@ class CineComaEncoder(pl.LightningModule):
 
         # data, ids = batch
         # TODO: change dataset/datamodule accordingly
-        s_t, z = batch
+        s_t, z_c, z_s = batch["s_t"], batch["z_c"], batch["z_s"]
+
+        z = z_c + z_s  # list concatenation
+        z = torch.stack(z).transpose(0, 1).type_as(s_t)  # to get N_batches x latent_dim
 
         bottleneck = self(s_t)
         z_hat = bottleneck["mu"]
@@ -96,8 +99,8 @@ class CineComaEncoder(pl.LightningModule):
         avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
 
         self.log_dict({
-            "training_recon_loss": avg_recon_loss,
-            "training_loss": avg_loss
+            "training_recon_loss": avg_recon_loss.detach(),
+            "training_loss": avg_loss.detach()
           },
           on_epoch=True,
           prog_bar=True,
@@ -115,11 +118,17 @@ class CineComaEncoder(pl.LightningModule):
         The common part is performed here.
         '''
 
-        s_t, z = batch
+
+        s_t, z_c, z_s = batch["s_t"], batch["z_c"], batch["z_s"]
+
+        z = z_c + z_s # list concatenation
+        z = torch.stack(z).transpose(0,1).type_as(s_t) # to get N_batches x latent_dim
+
         bottleneck = self(s_t)
         z_hat = bottleneck["mu"]
 
         recon_loss = self.rec_loss(z, z_hat)
+        loss = recon_loss
 
         # TODO: compute normalized metrics
         # rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
@@ -146,7 +155,7 @@ class CineComaEncoder(pl.LightningModule):
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
 
         self.log_dict(
-          {"val_recon_loss": avg_recon_loss, "val_loss": avg_loss},
+          {"val_recon_loss": avg_recon_loss.detach(), "val_loss": avg_loss.detach()},
           on_epoch=True,
           prog_bar=True,
           logger=True
@@ -167,8 +176,8 @@ class CineComaEncoder(pl.LightningModule):
         avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
 
         loss_dict = {
-            "test_recon_loss": avg_recon_loss,
-            "test_loss": avg_loss,
+            "test_recon_loss": avg_recon_loss.detach(),
+            "test_loss": avg_loss.detach(),
         }
 
         self.log_dict(loss_dict)

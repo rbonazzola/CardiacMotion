@@ -402,7 +402,12 @@ def cache_Ylm(sphere_coords, l_max):
 
 
 def cache_base_functions(sphere_coords, l_max, freq_max, Nt):
-        
+
+    '''
+      f_lmn(theta, phi, t) = Y_lm(theta, phi) * sin(2*pi*n*t)
+      g_lmn(theta, phi, t) = Y_lm(theta, phi) * cos(2*pi*n*t)
+    '''
+
     sin_n, cos_n = cache_sin_and_cos(freq_max, Nt)
     Y_lm = cache_Ylm(sphere_coords, l_max)
     

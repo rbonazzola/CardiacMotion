@@ -98,7 +98,7 @@ def get_coma_args(config, dm):
         "num_conv_filters_enc": convs.channels_enc,
         "num_conv_filters_dec_c": convs.channels_dec_c,
         "num_conv_filters_dec_s": convs.channels_dec_s,
-        "polygon_order": convs.parameters.polynomial_degree,
+        "cheb_polynomial_order": convs.parameters.polynomial_degree,
         "latent_dim_content": net.latent_dim_c,
         "latent_dim_style": net.latent_dim_s,
         "is_variational": config.loss.regularization.weight != 0,

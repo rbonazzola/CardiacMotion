@@ -65,7 +65,7 @@ class Encoder3DMesh(nn.Module):
         phase_input: bool,
         num_conv_filters_enc: Sequence[int],
         num_features: int,
-        polygon_order: int,
+        cheb_polynomial_order: int,
         n_layers: int,
         n_nodes: int,
         is_variational: bool,
@@ -80,7 +80,7 @@ class Encoder3DMesh(nn.Module):
         self.phase_input = phase_input
         self.filters_enc = num_conv_filters_enc
         self.filters_enc.insert(0, num_features)
-        self.K = polygon_order
+        self.K = cheb_polynomial_order
         self.adjacency_matrices = adjacency_matrices
         self.downsample_matrices = downsample_matrices
 
@@ -147,10 +147,12 @@ class Encoder3DMesh(nn.Module):
 
     def _build_cheb_conv_layers(self, n_filters, K):
         # Chebyshev convolutions (encoder)
+
+        #TOFIX: this should be specified in the docs.
         if self.phase_input:
-            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(2 * n_filters[0], n_filters[1], K[0])])
-        else:
-            cheb_enc = torch.nn.ModuleList([ChebConv_Coma(n_filters[0], n_filters[1], K[0])])
+            n_filters[0] = 2 * n_filters[0]
+
+        cheb_enc = torch.nn.ModuleList([ChebConv_Coma(n_filters[0], n_filters[1], K[0])])
         cheb_enc.extend([
             ChebConv_Coma(
                 n_filters[i],
@@ -177,8 +179,6 @@ class Encoder3DMesh(nn.Module):
     def forward(self, x):
 
         for i, layer in enumerate(self.layers): 
-            # for ChebConv
-            # layer = f"layer_{i}"
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
             x = self.layers[layer]["pool"](x)
             x = self.layers[layer]["activation_function"](x)

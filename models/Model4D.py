@@ -1,18 +1,11 @@
+import numpy as np
 import torch
 from torch import nn
 from models.Model3D import Encoder3DMesh
-
-from torch.nn import ModuleList, ModuleDict
-import torch.nn.functional as F
-
 from IPython import embed
 
-# import numpy as np
-
-# from .layers import ChebConv_Coma, Pool
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
-
 from typing import Sequence, Union
 
 
@@ -24,6 +17,11 @@ class EncoderTemporalSequence(nn.Module):
         super(EncoderTemporalSequence, self).__init__()
         self.latent_dim = encoder_config["latent_dim_content"] # + encoder_config["latent_dim_style"]
         self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
+
+        self.downsample_matrices = self.encoder_3d_mesh.downsample_matrices
+        self.adjacency_matrices = self.encoder_3d_mesh.adjacency_matrices
+        self.A_edge_index, self.A_norm = self.encoder_3d_mesh.A_edge_index, self.encoder_3d_mesh.A_norm
+
         self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
 
 
@@ -49,6 +47,14 @@ class EncoderTemporalSequence(nn.Module):
         return z_aggr_function
 
 
+    def set_mode(self, mode):
+        '''
+        params:
+          mode: "training" or "testing"
+        '''
+        self._mode = mode
+
+
     def encoder(self, x):
 
         self.n_timeframes = x.shape[1]
@@ -71,7 +77,7 @@ class EncoderTemporalSequence(nn.Module):
             log_var = self.z_aggr_function(log_var_t)
 
         # bottleneck =  self._partition_z(mu, log_var)
-        bottleneck = (mu, log_var)
+        bottleneck = {"mu": mu, "log_var": log_var}
         return bottleneck
 
 

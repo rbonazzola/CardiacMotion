@@ -7,6 +7,8 @@ import pytorch_lightning as pl
 import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
+from IPython import embed
+
 NUM_WORKERS = 4
 
 def mse(s1, s2):
@@ -44,13 +46,29 @@ class SyntheticMeshesDataset(Dataset):
         time_avg_mesh = self.mesh_popu.time_avg_meshes[index]
         dev_from_tmp_avg = np.array([ mse(moving_meshes[j], time_avg_mesh) for j, _ in enumerate(moving_meshes) ])
         dev_from_sphere = np.array([ mse(moving_meshes[j], ref_shape) for j, _ in enumerate(moving_meshes) ])
-       
+        z = self.mesh_popu.__dict__.get("coefficients", None)
+
+        try:
+            z_c = list(z[index][0].values())
+            z_s = list(z[index][1]['sin'].values()) + list(z[index][1]['cos'].values())
+        except:
+            pass
+
         if self.preprocessing_params.center_around_mean:
             for j, _ in enumerate(moving_meshes): 
                 moving_meshes[j] -= ref_shape
             time_avg_mesh -= ref_shape
 
-        return moving_meshes, time_avg_mesh, dev_from_tmp_avg, dev_from_sphere
+        dd = {
+            "s_t": moving_meshes,
+            "s_avg": time_avg_mesh,
+            "d_content": dev_from_tmp_avg,
+            "d_style": dev_from_sphere,
+            "z_c": z_c,
+            "z_s": z_s
+        }
+
+        return dd
     
 
     def __len__(self):
