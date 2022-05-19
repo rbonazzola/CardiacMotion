@@ -2,6 +2,7 @@ import torch
 import os
 import sys; sys.path.append("..")
 
+import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 try:

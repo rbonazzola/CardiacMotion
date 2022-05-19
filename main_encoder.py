@@ -6,6 +6,7 @@ from mlflow.tracking import MlflowClient
 from config.cli_args import CLI_args, overwrite_config_items
 
 from utils.helpers import *
+from utils.mlflow_helpers import get_mlflow_parameters, get_mlflow_dataset_params
 from torchviz import make_dot
 
 from config.load_config import load_yaml_config, to_dict
@@ -15,43 +16,42 @@ import pprint
 
 from IPython import embed
 
+from models.Model import Encoder3DMesh
+from utils.helpers import get_coma_args
+from models.Model4D import EncoderTemporalSequence
+from models.EncoderPLModule import CineComaEncoder
+
+ENCODER_ARGS = [
+    "num_features",
+    "n_layers",
+    "n_nodes",
+    "num_conv_filters_enc",
+    "cheb_polynomial_order",
+    "latent_dim_content",
+    "is_variational",
+    "phase_input",
+    "downsample_matrices",
+    "adjacency_matrices",
+    "activation_layers"
+]
+
 
 ###
 def main(config, trainer_args):
+    
     #
     dm = get_datamodule(config)
-    from models.Model import Encoder3DMesh
-    from utils.helpers import get_coma_args
     coma_args = get_coma_args(config, dm)
     coma_args["phase_input"] = False
 
-    encoder_args = [
-        "num_features",
-        "n_layers",
-        "n_nodes",
-        "num_conv_filters_enc",
-        "cheb_polynomial_order",
-        "latent_dim_content",
-        "is_variational",
-        "phase_input",
-        "downsample_matrices",
-        "adjacency_matrices",
-        "activation_layers"
-    ]
+    enc_config = {k: v for k, v in coma_args.items() if k in ENCODER_ARGS}
 
-    enc_config = {k: v for k, v in coma_args.items() if k in encoder_args}
-
-    from models.Model4D import EncoderTemporalSequence
     cine_encoder = EncoderTemporalSequence(enc_config, z_aggr_function="DFT", n_timeframes=20)
-
-    from models.EncoderPLModule import CineComaEncoder
     PLEncoder = CineComaEncoder(cine_encoder, config)
-    trainer = pl.Trainer()
-    trainer.fit(PLEncoder, dm)
 
     if config.mlflow:
         if config.mlflow.experiment_name is None:
-            config.mlflow.experiment_name = "default"
+            config.mlflow.experiment_name = "Encoder only"
         trainer_args.logger = MLFlowLogger(
             experiment_name=config.mlflow.experiment_name,
             tracking_uri=config.mlflow.tracking_uri,
@@ -61,9 +61,7 @@ def main(config, trainer_args):
     else:
         trainer_args.logger = None
 
-    dm, model, trainer = get_dm_model_trainer(config, trainer_args)
-
-    # gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
+    trainer = get_lightning_trainer(trainer_args)
 
     if config.mlflow:
 
@@ -93,12 +91,12 @@ def main(config, trainer_args):
             mlflow.log_params(get_mlflow_dataset_params(config))
             # mlflow.log_params(config.additional_mlflow_params)
 
-            trainer.fit(model, datamodule=dm)
+            trainer.fit(PLEncoder, datamodule=dm)
             trainer.test(datamodule=dm)  # Generates metrics for the full test dataset
-            trainer.predict(ckpt_path='best', datamodule=dm)  # Generates figures for a few samples
+            # trainer.predict(ckpt_path='best', datamodule=dm)  # Generates figures for a few samples
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
-        trainer.fit(model, datamodule=dm)
+        trainer.fit(PLEncoder, datamodule=dm)
         result = trainer.test(datamodule=dm)
 
 
@@ -143,5 +141,5 @@ if __name__ == "__main__":
         pp.pprint(to_dict(config))
         if args.dry_run:
             exit()
-
+    print(config.mlflow)
     main(config, trainer_args)

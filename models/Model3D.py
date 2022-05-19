@@ -178,6 +178,7 @@ class Encoder3DMesh(nn.Module):
 
     def forward(self, x):
 
+        # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
             x = self.layers[layer]["pool"](x)
@@ -186,12 +187,7 @@ class Encoder3DMesh(nn.Module):
         x = self.concatenate_graph_features(x)
         
         mu = self.enc_lin_mu(x)
-        
-        if self._is_variational:
-            log_var = self.enc_lin_var(x)
-        else:
-            log_var = None
-
+        log_var = self.enc_lin_var(x) if self._is_variational else None
         return mu, log_var
 
 
