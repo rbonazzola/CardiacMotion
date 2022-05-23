@@ -34,7 +34,7 @@ class EncoderTemporalSequence(nn.Module):
             self.n_timeframes = n_timeframes
             z_aggr_function = FCN_Aggregator(
                 features_in=n_timeframes * self.latent_dim,
-                features_out=(self.z_c + self.z_s)
+                features_out=(self.latent_dim)
             )
 
         elif z_aggr_function.lower() == "dft" or z_aggr_function.lower() == "discrete_fourier_transform":

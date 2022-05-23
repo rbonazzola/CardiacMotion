@@ -46,7 +46,7 @@ def main(config, trainer_args):
 
     enc_config = {k: v for k, v in coma_args.items() if k in ENCODER_ARGS}
 
-    cine_encoder = EncoderTemporalSequence(enc_config, z_aggr_function="DFT", n_timeframes=20)
+    cine_encoder = EncoderTemporalSequence(enc_config, z_aggr_function=config.network_architecture.z_aggr_function, n_timeframes=config.dataset.parameters.T)
     PLEncoder = CineComaEncoder(cine_encoder, config)
 
     if config.mlflow:

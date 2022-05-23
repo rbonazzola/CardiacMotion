@@ -94,7 +94,9 @@ class Pool(MessagePassing):
 
     def __init__(self, pool_mat=None):
         # source_to_target is the default value for flow, but is specified here for explicitness
-        self.pool_mat = pool_mat.transpose(0, 1)
+        self.pool_mat = pool_mat
+        if self.pool_mat is not None:
+            self.pool_mat = pool_mat.transpose(0, 1)
         super(Pool, self).__init__(flow='source_to_target')
 
     def forward(self, x, pool_mat=None,  dtype=None):

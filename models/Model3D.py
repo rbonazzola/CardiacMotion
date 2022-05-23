@@ -126,7 +126,7 @@ class Encoder3DMesh(nn.Module):
 
         pool_layers = ModuleList()
         for i in range(len(downsample_matrices)):
-            pool_layers.append(Pool(downsample_matrices[i]))
+            pool_layers.append(Pool())
         return pool_layers
 
 
@@ -181,11 +181,11 @@ class Encoder3DMesh(nn.Module):
         # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
-            x = self.layers[layer]["pool"](x)
+            x = self.layers[layer]["pool"](x, self.downsample_matrices[i])
             x = self.layers[layer]["activation_function"](x)
         
         x = self.concatenate_graph_features(x)
-        
+       
         mu = self.enc_lin_mu(x)
         log_var = self.enc_lin_var(x) if self._is_variational else None
         return mu, log_var
