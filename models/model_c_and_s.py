@@ -52,7 +52,6 @@ class Coma4D_C_and_S(torch.nn.Module):
         self.downsample_matrices = downsample_matrices
         self.upsample_matrices = upsample_matrices
         self.adjacency_matrices = adjacency_matrices
-        self.template_mesh = template
 
         self._n_features_before_z = self.downsample_matrices[-1].shape[0] * self.filters_enc[-1]
 

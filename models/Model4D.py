@@ -2,15 +2,13 @@ import numpy as np
 import torch
 from torch import nn
 from models.Model3D import Encoder3DMesh
-from IPython import embed
 
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
 from typing import Sequence, Union
-
+from IPython import embed
 
 class EncoderTemporalSequence(nn.Module):
-
 
     def __init__(self, encoder_config, z_aggr_function, n_timeframes=None):
 
@@ -86,6 +84,93 @@ class EncoderTemporalSequence(nn.Module):
         return self.encoder(x)
 
 
+class DecoderStyle(nn.Module):
+
+    def __init__(self, decoder_config, phase_embedding_method, n_timeframes=None):
+
+        self.n_nodes = n_nodes
+        self.n_layers = n_layers
+
+        self.filters_dec_s = num_conv_filters_dec_s
+        self.filters_dec_s.insert(0, num_features)
+
+        self.K = polygon_order
+
+        self.cheb_dec_s = self._build_decoder(self.filters_dec_s, self.K)
+
+        self.dec_lin_s = torch.nn.Linear(
+            self.latent_dim,
+            self.filters_dec_s[-1] * self.upsample_matrices[-1].shape[1]
+        )
+
+
+    def _build_decoder(self, n_filters, K):
+
+        # Chebyshev deconvolutions (decoder)
+        cheb_dec = torch.nn.ModuleList([
+            ChebConv_Coma(
+                n_filters[-i - 1],
+                n_filters[-i - 2],
+                K[i]
+            ) for i in range(len(n_filters) - 1)
+        ])
+        cheb_dec[-1].bias = None  # No bias for last convolution layer
+        return cheb_dec
+
+
+class DecoderTemporalSequence(nn.Module):
+
+
+    def __init__(self, decoder_config, phase_embedding_method, n_timeframes=None):
+
+        super(DecoderTemporalSequence, self).__init__()
+        self.latent_dim = encoder_config["latent_dim_content"] # + encoder_config["latent_dim_style"]
+        self.decoder_3d_mesh = Decoder3DMesh(**decoder_config)
+
+        self.downsample_matrices = self.decoder_3d_mesh.downsample_matrices
+        self.adjacency_matrices = self.decoder_3d_mesh.adjacency_matrices
+        self.A_edge_index, self.A_norm = self.encoder_3d_mesh.A_edge_index, self.encoder_3d_mesh.A_norm
+
+        self.phase_embedding = self._get_phase_embedding(phase_embedding_method, n_timeframes)
+
+        self.decoder_content = Decoder3DMesh()
+        self.decoder_style = DecoderStyle()
+
+
+
+   def forward(self, z):
+
+       z_c, z_s = self.partition_z(z)
+
+       phased_z_s = self.phase_embedding(z)
+
+       avg_shape = self.decoder_content(z_c)
+       def_field_t = self.decoder_style(phased_z_s)
+
+       shape_t = avg_shape + def_field_t
+
+       return avg_shape, shape_t
+
+
+    def _partition_z(self, mu, log_var=None):
+
+        mu_c = mu[:, :self.z_c]
+        mu_s = mu[:, self.z_c:]
+        bottleneck = {"mu_s": mu_s, "mu_c": mu_c}
+
+        if log_var is not None:
+            log_var_c = log_var[:, :self.z_c]
+            log_var_s = log_var[:, self.z_c:]
+            bottleneck["log_var_c"] = log_var_c
+            bottleneck["log_var_s"] = log_var_s
+
+        return bottleneck
+
+   def _get_phase_embedding(self):
+       pass
+
+
+
 
 class Coma4D_C_and_S(torch.nn.Module):
 
@@ -136,18 +221,3 @@ class Coma4D_C_and_S(torch.nn.Module):
         z = self.encoder(x)
         x_hat = self.decoder(z)
         return x_hat
-
-
-    def _partition_z(self, mu, log_var=None):
-
-        mu_c = mu[:, :self.z_c]
-        mu_s = mu[:, self.z_c:]
-        bottleneck = {"mu_s": mu_s, "mu_c": mu_c}
-
-        if log_var is not None:
-            log_var_c = log_var[:, :self.z_c]
-            log_var_s = log_var[:, self.z_c:]
-            bottleneck["log_var_c"] = log_var_c
-            bottleneck["log_var_s"] = log_var_s
-
-        return bottleneck
