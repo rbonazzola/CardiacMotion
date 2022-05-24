@@ -5,6 +5,7 @@ from torch.nn import ModuleList, ModuleDict
 import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
 from typing import Sequence, Union
+from copy import copy
 
 from IPython import embed
 
@@ -54,7 +55,21 @@ class Autoencoder3DMesh(nn.Module):
         x_hat = self.decoder(z)
         return x_hat
 
+#####
 
+ENCODER_ARGS = [
+    "num_features",
+    "n_layers",
+    "n_nodes",
+    "num_conv_filters_enc",
+    "cheb_polynomial_order",
+    "latent_dim_content",
+    "is_variational",
+    "phase_input",
+    "downsample_matrices",
+    "adjacency_matrices",
+    "activation_layers"
+]
 
 class Encoder3DMesh(nn.Module):
 
@@ -78,7 +93,7 @@ class Encoder3DMesh(nn.Module):
 
         self.n_nodes = n_nodes
         self.phase_input = phase_input
-        self.filters_enc = num_conv_filters_enc
+        self.filters_enc = copy(num_conv_filters_enc)
         self.filters_enc.insert(0, num_features)
         self.K = cheb_polynomial_order
         self.adjacency_matrices = adjacency_matrices
@@ -190,12 +205,26 @@ class Encoder3DMesh(nn.Module):
         log_var = self.enc_lin_var(x) if self._is_variational else None
         return mu, log_var
 
+################# DECODER #################
+
+DECODER_ARGS = [
+    "num_features",
+    "n_layers",
+    "n_nodes",
+    "num_conv_filters_dec",
+    "cheb_polynomial_order",
+    "latent_dim_content",
+    "is_variational",
+    "upsample_matrices",
+    "adjacency_matrices",
+    "activation_layers"
+]
 
 class Decoder3DMesh(nn.Module):
     
     def __init__(self,
-        phase_input: bool,
-        num_conv_filters_enc: Sequence[int], num_features: int,
+        num_conv_filters_dec: Sequence[int],
+        num_features: int,
         cheb_polynomial_order: int,
         n_layers: int,
         n_nodes: int,
@@ -208,30 +237,35 @@ class Decoder3DMesh(nn.Module):
         super(Decoder3DMesh, self).__init__()
 
         self.n_nodes = n_nodes
-        self.filters_dec = num_conv_filters_dec
-        # self.filters_dec.insert(0, num_features)
+        self.filters_dec = copy(num_conv_filters_dec)
+        self.filters_dec.insert(0, num_features)
+        self.filters_dec = list(reversed(self.filters_dec))
+
         self.K = cheb_polynomial_order
         self.adjacency_matrices = adjacency_matrices
         self.A_edge_index, self.A_norm = self._build_adj_matrix()
-        self.upsample_matrices = upsample_matrices
+        self.A_edge_index = list(reversed(self.A_edge_index))
+        self.A_norm = list(reversed(self.A_norm))
 
-        self._n_features_before_z = self.upsample_matrices[-1].shape[0] * self.filters_dec[-1]
+        self.upsample_matrices = list(reversed(upsample_matrices))
+
+        self._n_features_before_z = self.upsample_matrices[0].shape[1] * self.filters_dec[0]
 
         self._is_variational = is_variational
         self.latent_dim = latent_dim_content
 
         self.activation_layers = [activation_layers] * n_layers if isinstance(activation_layers, str) else activation_layers
 
-        self.layers = self._build_decoder()
-
-        # Fully connected layers connecting the last pooling layer and the latent space layer.
+        # Fully connected layer connecting the latent space layer with the first upsampling layer.
         self.dec_lin = torch.nn.Linear(self.latent_dim, self._n_features_before_z)
+
+        self.layers = self._build_decoder()
 
 
     def _build_decoder(self):
 
         cheb_conv_layers = self._build_cheb_conv_layers(self.filters_dec, self.K)
-        pool_layers = self._build_pool_layers(self.downsample_matrices)
+        pool_layers = self._build_pool_layers(self.upsample_matrices)
         activation_layers = self._build_activation_layers(self.activation_layers)
 
         decoder = ModuleDict()
@@ -239,9 +273,9 @@ class Decoder3DMesh(nn.Module):
         for i in range(len(cheb_conv_layers)):
             layer = f"layer_{i}"
             decoder[layer] = ModuleDict()
-            decoder[layer]["graph_conv"] = cheb_conv_layers[i]
-            decoder[layer]["pool"] = pool_layers[i]
             decoder[layer]["activation_function"] = activation_layers[i]
+            decoder[layer]["pool"] = pool_layers[i]
+            decoder[layer]["graph_conv"] = cheb_conv_layers[i]
 
         return decoder
 
@@ -253,7 +287,7 @@ class Decoder3DMesh(nn.Module):
 
         pool_layers = ModuleList()
         for i in range(len(upsample_matrices)):
-            pool_layers.append(Pool(upsample_matrices[i]))
+            pool_layers.append(Pool())
         return pool_layers
 
 
@@ -275,13 +309,9 @@ class Decoder3DMesh(nn.Module):
     def _build_cheb_conv_layers(self, n_filters, K):
         # Chebyshev convolutions (decoder)
         cheb_dec = torch.nn.ModuleList([ChebConv_Coma(n_filters[0], n_filters[1], K[0])])
-        cheb_dec.extend([
-            ChebConv_Coma(
-                n_filters[i],
-                n_filters[i+1],
-                K[i]
-            ) for i in range(1, len(n_filters)-1)
-        ])
+        for i in range(1, len(n_filters)-1):
+            conv_layer = ChebConv_Coma(n_filters[i], n_filters[i+1], K[i])
+            cheb_dec.extend([conv_layer])
 
         cheb_dec[-1].bias = None  # No bias for last convolution layer
         return cheb_dec
@@ -300,12 +330,13 @@ class Decoder3DMesh(nn.Module):
         The decoder applies a phase embedding on the latent vector
         '''
 
-        x = self.dec_lin()
-        x = x.reshape(x.shape[0], cheb_dec[0].in_channels, -1)
+        x = self.dec_lin(x)
+        x = x.reshape(-1, self.layers["layer_0"]["graph_conv"].in_channels)
 
         for i, layer in enumerate(self.layers):
-            x = self.layers[layer]["activation_function"](x)
-            x = self.layers[layer]["pool"](x)
-            x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
-        return x
 
+            x = self.layers[layer]["activation_function"](x)
+            x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
+            x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
+
+        return x

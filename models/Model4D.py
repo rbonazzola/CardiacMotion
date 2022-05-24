@@ -2,11 +2,11 @@ import numpy as np
 import torch
 from torch import nn
 from models.Model3D import Encoder3DMesh
-
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
 from typing import Sequence, Union
 from IPython import embed
+
 
 class EncoderTemporalSequence(nn.Module):
 
@@ -125,7 +125,8 @@ class DecoderTemporalSequence(nn.Module):
 
         super(DecoderTemporalSequence, self).__init__()
         self.latent_dim = encoder_config["latent_dim_content"] # + encoder_config["latent_dim_style"]
-        self.decoder_3d_mesh = Decoder3DMesh(**decoder_config)
+        self.decoder_content = Decoder3DMesh(**decoder_c_config)
+        self.decoder_style = DecoderStyle(**decoder_s_config)
 
         self.downsample_matrices = self.decoder_3d_mesh.downsample_matrices
         self.adjacency_matrices = self.decoder_3d_mesh.adjacency_matrices
@@ -133,12 +134,8 @@ class DecoderTemporalSequence(nn.Module):
 
         self.phase_embedding = self._get_phase_embedding(phase_embedding_method, n_timeframes)
 
-        self.decoder_content = Decoder3DMesh()
-        self.decoder_style = DecoderStyle()
 
-
-
-   def forward(self, z):
+    def forward(self, z):
 
        z_c, z_s = self.partition_z(z)
 
@@ -166,8 +163,8 @@ class DecoderTemporalSequence(nn.Module):
 
         return bottleneck
 
-   def _get_phase_embedding(self):
-       pass
+    def _get_phase_embedding(self):
+        pass
 
 
 

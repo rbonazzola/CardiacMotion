@@ -15,7 +15,7 @@ from utils.utils import normal
 
 __author__ = ['Priyanka Patel', 'Rodrigo Bonazzola']
 
-# N: number of subjects (or, equivalently, meshes)
+# N: number of subjects
 # M: number of vertices in mesh
 # F: number of features (typically, 3: x, y and z)
 
@@ -61,7 +61,7 @@ class ChebConv_Coma(ChebConv):
               self.weight.append(next(itertools.islice(self.parameters(), i, None)).t())
             except:
               pass
-        
+
         out = torch.matmul(Tx_0, self.weight[0])
 
         # if self.weight.size(0) > 1:
@@ -86,6 +86,7 @@ class ChebConv_Coma(ChebConv):
 
 
 class Pool(MessagePassing):
+
     '''
     This module can be used in two ways:
       - Provide a pool matrix on initialization.
@@ -102,7 +103,7 @@ class Pool(MessagePassing):
     def forward(self, x, pool_mat=None,  dtype=None):
         if self.pool_mat is None:
             pool_mat = pool_mat.transpose(0, 1)
-        else:
+        if self.pool_mat is not None:
             pool_mat = self.pool_mat
         out = self.propagate(edge_index=pool_mat._indices(), x=x, norm=pool_mat._values(), size=pool_mat.size())
         return out
