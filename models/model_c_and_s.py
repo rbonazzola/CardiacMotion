@@ -212,8 +212,10 @@ class Coma4D_C_and_S(torch.nn.Module):
         for t in range(n_timeframes):
            
             z_s_t = phased_z_s[:, t, ...]
+            z = torch.cat([z_c, z_s_t], axis=-1)
 
-            x = self.dec_lin_s(torch.cat([z_c, z_s_t], axis=-1))
+
+            x = self.dec_lin_s()
             x = F.relu(x)
 
             # x = x.reshape(-1, self.cheb_dec[0].in_channels)

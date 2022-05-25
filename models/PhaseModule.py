@@ -9,7 +9,7 @@ class PhaseTensor(nn.Module):
         super(PhaseTensor, self).__init__()
         self.version = version
 
-    def phase_tensor(self, x, ):
+    def phase_tensor(self, x):
         '''
         params:
           z: a batched vector (N x T x M)

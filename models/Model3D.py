@@ -2,33 +2,31 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import ModuleList, ModuleDict
-import torch.nn.functional as F
 from .layers import ChebConv_Coma, Pool
-from typing import Sequence, Union
 from copy import copy
+from typing import Sequence, Union, List
+from IPython import embed # left there for debugging if needed
 
-from IPython import embed
+#TODO: Implement common parent class for encoder and decoder, to capture common behaviour.
 
 class Autoencoder3DMesh(nn.Module):
 
     def __init__(self,
-        phase_input: bool,
         num_conv_filters_enc: Sequence[int], num_features: int,
         cheb_polynomial_order: int,
         n_layers: int,
         n_nodes: int,
         is_variational: bool,
         latent_dim_content: int,
-        adjacency_matrices,
-        downsample_matrices,
-        upsample_matrices,
-        activation_layers="ReLU"):
+        adjacency_matrices: List[torch.Tensor],
+        downsample_matrices: List[torch.Tensor],
+        upsample_matrices: List[torch.Tensor],
+        activation_layers: Union[List[str], str] ="ReLU"):
 
         super(Autoencoder3DMesh, self).__init__()
 
 
         self.encoder = Encoder3DMesh(
-            phase_input,
             num_conv_filters_enc,
             num_features,
             cheb_polynomial_order,
@@ -51,8 +49,11 @@ class Autoencoder3DMesh(nn.Module):
         )
 
     def forward(self, x):
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
+        mu, logvar = self.encoder(x)
+
+        # Add sampling if is_variational == True and it's in training mode
+
+        x_hat = self.decoder(mu)
         return x_hat
 
 #####
@@ -85,8 +86,8 @@ class Encoder3DMesh(nn.Module):
         n_nodes: int,
         is_variational: bool,
         latent_dim_content: int, 
-        adjacency_matrices,
-        downsample_matrices,
+        adjacency_matrices: List[torch.Tensor],
+        downsample_matrices: List[torch.Tensor],
         activation_layers="ReLU"):
 
         super(Encoder3DMesh, self).__init__()
@@ -203,7 +204,7 @@ class Encoder3DMesh(nn.Module):
        
         mu = self.enc_lin_mu(x)
         log_var = self.enc_lin_var(x) if self._is_variational else None
-        return mu, log_var
+        return {"mu": mu, "log_var": log_var}
 
 ################# DECODER #################
 
@@ -223,15 +224,15 @@ DECODER_ARGS = [
 class Decoder3DMesh(nn.Module):
     
     def __init__(self,
-        num_conv_filters_dec: Sequence[int],
         num_features: int,
-        cheb_polynomial_order: int,
         n_layers: int,
         n_nodes: int,
+        num_conv_filters_dec: Sequence[int],
+        cheb_polynomial_order: int,
+        latent_dim: int,
         is_variational: bool,
-        latent_dim_content: int,
-        adjacency_matrices,
-        upsample_matrices,
+        upsample_matrices: List[torch.Tensor],
+        adjacency_matrices: List[torch.Tensor],
         activation_layers="ReLU"):
 
         super(Decoder3DMesh, self).__init__()
@@ -252,7 +253,7 @@ class Decoder3DMesh(nn.Module):
         self._n_features_before_z = self.upsample_matrices[0].shape[1] * self.filters_dec[0]
 
         self._is_variational = is_variational
-        self.latent_dim = latent_dim_content
+        self.latent_dim = latent_dim
 
         self.activation_layers = [activation_layers] * n_layers if isinstance(activation_layers, str) else activation_layers
 
@@ -278,6 +279,7 @@ class Decoder3DMesh(nn.Module):
             decoder[layer]["graph_conv"] = cheb_conv_layers[i]
 
         return decoder
+
 
     def _build_pool_layers(self, upsample_matrices:Sequence[np.array]):
 
@@ -324,17 +326,14 @@ class Decoder3DMesh(nn.Module):
         ])
         return list(adj_edge_index), list(adj_norm)
 
+
     def forward(self, x):
 
-        '''
-        The decoder applies a phase embedding on the latent vector
-        '''
-
         x = self.dec_lin(x)
-        x = x.reshape(-1, self.layers["layer_0"]["graph_conv"].in_channels)
+        batch_size = x.shape[0] if x.dim() == 2 else 1
+        x = x.reshape(batch_size, -1, self.layers["layer_0"]["graph_conv"].in_channels)
 
         for i, layer in enumerate(self.layers):
-
             x = self.layers[layer]["activation_function"](x)
             x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
