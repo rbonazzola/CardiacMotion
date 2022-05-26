@@ -5,7 +5,7 @@ import sys; sys.path.append("..")
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
-from pytorch_lightning.callbacks import RichModelSummary as ModelSummary
+from pytorch_lightning.callbacks import RichModelSummary
 from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 from utils import mesh_operations
@@ -131,8 +131,8 @@ def get_lightning_trainer(trainer_args):
     # trainer
     trainer = pl.Trainer(
         callbacks=[
-            EarlyStopping(monitor="val_loss", mode="min", patience=10),
-            ModelSummary(max_depth=-1)
+            EarlyStopping(monitor="val_loss", mode="min", patience=3),
+            RichModelSummary(max_depth=-1)
         ],
         gpus=[trainer_args.gpus],
         auto_select_gpus=trainer_args.auto_select_gpus,

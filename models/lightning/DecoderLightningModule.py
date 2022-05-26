@@ -1,6 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from argparse import Namespace
 
 from PIL import Image
 import imageio
@@ -21,9 +22,9 @@ def mse(s1, s2=None):
     return ((s1-s2)**2).sum(-1).mean(-1)
 
 
-class CineComaEncoder(pl.LightningModule):
+class CineComaDecoder(pl.LightningModule):
 
-    def __init__(self, model, params):
+    def __init__(self, model: torch.nn.Module, params: Namespace):
 
         """
         :param model: provide the PyTorch model.

@@ -9,54 +9,25 @@ from IPython import embed # left there for debugging if needed
 
 #TODO: Implement common parent class for encoder and decoder, to capture common behaviour.
 
+################# FULL AUTOENCODER #################
+
 class Autoencoder3DMesh(nn.Module):
 
-    def __init__(self,
-        num_conv_filters_enc: Sequence[int], num_features: int,
-        cheb_polynomial_order: int,
-        n_layers: int,
-        n_nodes: int,
-        is_variational: bool,
-        latent_dim_content: int,
-        adjacency_matrices: List[torch.Tensor],
-        downsample_matrices: List[torch.Tensor],
-        upsample_matrices: List[torch.Tensor],
-        activation_layers: Union[List[str], str] ="ReLU"):
+    def __init__(self, enc_config, dec_config):
 
         super(Autoencoder3DMesh, self).__init__()
 
-
-        self.encoder = Encoder3DMesh(
-            num_conv_filters_enc,
-            num_features,
-            cheb_polynomial_order,
-            n_layers,
-            n_nodes,
-            is_variational,
-            latent_dim_content,
-            adjacency_matrices,
-            downsample_matrices,
-            activation_layers
-        )
-
-        self.decoder = Decoder3DMesh(
-            latent_dim_content,
-            num_conv_filters_dec_c,
-            num_conv_filters_dec_s,
-            cheb_polynomial_order,
-            upsample_matrices,
-            adjacency_matrices
-        )
+        self.encoder = Encoder3DMesh(**enc_config)
+        self.decoder = Decoder3DMesh(**dec_config)
 
     def forward(self, x):
+
         mu, logvar = self.encoder(x)
-
         # Add sampling if is_variational == True and it's in training mode
-
         x_hat = self.decoder(mu)
         return x_hat
 
-#####
+################# ENCODER #################
 
 ENCODER_ARGS = [
     "num_features",
