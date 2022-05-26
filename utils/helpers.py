@@ -5,11 +5,7 @@ import sys; sys.path.append("..")
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
-try:
-    from pytorch_lightning.callbacks import RichModelSummary as ModelSummary
-except:
-    pass
-
+from pytorch_lightning.callbacks import RichModelSummary as ModelSummary
 from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 from utils import mesh_operations
@@ -31,6 +27,7 @@ def scipy_to_torch_sparse(scp_matrix):
 
 
 def get_datamodule(config, perform_setup=True):
+
     '''
 
     '''
@@ -90,6 +87,7 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
 
 
 def get_coma_args(config, dm):
+
     net = config.network_architecture
 
     convs = net.convolution
@@ -116,12 +114,12 @@ def get_coma_args(config, dm):
 
 def get_lightning_module(config, dm):
 
-    from models.model_c_and_s import Coma4D_C_and_S
-    from models.ComaLightningModule import CoMA
+    from models.Model4D import AutoencoderTemporalSequence
+    from models.lightning.ComaLightningModule import CoMA
 
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
-    coma4D = Coma4D_C_and_S(**coma_args)
+    coma4D = AutoencoderTemporalSequence(**coma_args)
 
     # Initialize PyTorch Lightning module
     model = CoMA(coma4D, config)
@@ -134,7 +132,7 @@ def get_lightning_trainer(trainer_args):
     trainer = pl.Trainer(
         callbacks=[
             EarlyStopping(monitor="val_loss", mode="min", patience=10),
-            # ModelSummary(max_depth=-1)
+            ModelSummary(max_depth=-1)
         ],
         gpus=[trainer_args.gpus],
         auto_select_gpus=trainer_args.auto_select_gpus,
