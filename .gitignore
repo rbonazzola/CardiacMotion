@@ -6,3 +6,4 @@
 mlruns/
 lightning_logs/
 *.sif
+data/synthetic/synthetic_*
