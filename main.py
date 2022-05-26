@@ -60,8 +60,9 @@ def main(config, trainer_args):
                 make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
                 mlflow.log_figure("comp_graph_network.png")
 
-            mlflow.log_params(get_mlflow_parameters(config))
-            mlflow.log_params(get_mlflow_dataset_params(config))
+            mlflow_params = get_mlflow_parameters(config)
+            mlflow_params.update(get_mlflow_dataset_params(config))
+            mlflow.log_params(mlflow_params)
             #mlflow.log_params(config.additional_mlflow_params)
 
             trainer.fit(model, datamodule=dm)

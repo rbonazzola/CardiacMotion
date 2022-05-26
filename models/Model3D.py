@@ -333,10 +333,7 @@ class Decoder3DMesh(nn.Module):
 
         for i, layer in enumerate(self.layers):
             x = self.layers[layer]["activation_function"](x)
-            try:
-                x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
-            except:
-                embed()
+            x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
 
         return x
