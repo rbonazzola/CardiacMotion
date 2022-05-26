@@ -1,12 +1,19 @@
 import numpy as np
 import torch
 from torch import nn
+
 from models.Model3D import Encoder3DMesh, Decoder3DMesh
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
+
 from typing import Sequence, Union, List
 from copy import copy
 from IPython import embed
+
+BATCH_DIMENSION = 0
+TIME_DIMENSION = 1
+NODE_DIMENSION = 2
+FEATURE_DIMENSION = 3
 
 def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], str]):
 
@@ -19,16 +26,38 @@ def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], 
         setattr(self, attribute, getattr(child, attribute))
     return self
 
+COMMON_ARGS = [
+    "num_features",
+    "n_layers",
+    "n_nodes",
+    "cheb_polynomial_order",
+    "is_variational",
+    "adjacency_matrices",
+    "activation_layers",
+]
+
+##########################################################################################
+
+ENCODER_ARGS = copy(COMMON_ARGS)
+ENCODER_ARGS.extend([
+  "phase_input",
+  "downsample_matrices",
+  "num_conv_filters_enc",
+  "latent_dim_content",
+  "latent_dim_style"
+])
+
 
 class EncoderTemporalSequence(nn.Module):
 
     def __init__(self, encoder_config, z_aggr_function, phase_embedding=None, n_timeframes=None):
 
         super(EncoderTemporalSequence, self).__init__()
-        self.latent_dim = encoder_config["latent_dim_content"] # + encoder_config["latent_dim_style"]
+        encoder_config = copy(encoder_config)
+        encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
         self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
 
-        self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["downsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm"])
+        self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["downsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm", "latent_dim"])
 
         self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
         self.phase_embedding = phase_embedding
@@ -58,7 +87,7 @@ class EncoderTemporalSequence(nn.Module):
         return z_aggr_function
 
 
-    def set_mode(self, mode):
+    def set_mode(self, mode: str):
         '''
         params:
           mode: "training" or "testing"
@@ -94,29 +123,31 @@ class EncoderTemporalSequence(nn.Module):
 
 ##########################################################################################
 
-DECODER_S_ARGS = [
-    "num_features",
-    "n_layers",
-    "n_nodes",
-    #"num_conv_filters_dec_c",
+DECODER_C_ARGS = copy(COMMON_ARGS)
+DECODER_C_ARGS.extend([
+  "upsample_matrices",
+  "num_conv_filters_dec_c",
+  "latent_dim_content"
+])
+
+DECODER_S_ARGS = copy(COMMON_ARGS)
+DECODER_S_ARGS.extend([
+    "upsample_matrices",
     "num_conv_filters_dec_s",
-    "cheb_polynomial_order",
     "latent_dim_content",
     "latent_dim_style",
-    "is_variational",
-    "upsample_matrices",
-    "adjacency_matrices",
-    "activation_layers",
     "n_timeframes"
-]
+])
 
 class DecoderStyle(nn.Module):
 
     def __init__(self, decoder_config: dict, phase_embedding_method: str, n_timeframes: Union[int, None]=None):
 
         super(DecoderStyle, self).__init__()
-        n_timeframes = decoder_config.pop("n_timeframes")
-        self.phase_tensor = self._get_phase_embedding(phase_embedding_method, n_timeframes)
+
+        decoder_config = copy(decoder_config)
+        self.n_timeframes = decoder_config.pop("n_timeframes")
+        self.phase_embedding = self._get_phase_embedding(phase_embedding_method, self.n_timeframes)
 
         decoder_config = copy(decoder_config)
         decoder_config["latent_dim"] = decoder_config.pop("latent_dim_content") + 2 * decoder_config.pop("latent_dim_style")
@@ -136,7 +167,7 @@ class DecoderStyle(nn.Module):
         elif phase_embedding_method.lower() in ["exponential_v1", "exp_v1", "exp"]:
             return PhaseTensor(version="version_1")
 
-        elif phase_embedding_method.lower() in ["exponential_v2", "exp_v2", "exp"]:
+        elif phase_embedding_method.lower() in ["exponential_v2", "exp_v2"]:
             return PhaseTensor(version="version_2")
 
         else:
@@ -154,8 +185,8 @@ class DecoderStyle(nn.Module):
 
     def forward(self, z_c, z_s, n_timeframes):
 
-        phased_z_s = z_s.unsqueeze(1).repeat(1, n_timeframes, *[1 for x in z_s.shape[1:]])
-        phased_z_s = self.phase_tensor(phased_z_s)
+        phased_z_s = z_s.unsqueeze(TIME_DIMENSION).repeat(1, self.n_timeframes, *[1 for x in z_s.shape[1:]])
+        phased_z_s = self.phase_embedding(phased_z_s)
         s_out = [ self._process_one_timeframe(z_c, phased_z_s, t) for t in range(n_timeframes) ]
         s_out = torch.cat(s_out, dim=1)
         return s_out
@@ -163,86 +194,57 @@ class DecoderStyle(nn.Module):
 
 class DecoderTemporalSequence(nn.Module):
 
-    def __init__(self, decoder_config, phase_embedding_method, n_timeframes=None):
+    def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method, n_timeframes=None):
 
         super(DecoderTemporalSequence, self).__init__()
-        self.latent_dim = decoder_config["latent_dim_content"] + decoder_config["latent_dim_style"]
+
+        decoder_c_config = copy(decoder_c_config)
+        decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
+        decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
+
+        self.latent_dim_content = decoder_c_config["latent_dim"]
+        self.latent_dim_style = decoder_s_config["latent_dim_style"]
+
         self.decoder_content = Decoder3DMesh(**decoder_c_config)
-        self.decoder_style = DecoderStyle(**decoder_s_config)
-        self = _steal_attributes_from_child(self, child="decoder_content", attributes=["downsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm"])
-        self.phase_embedding = self._get_phase_embedding(phase_embedding_method, n_timeframes)
+        self.decoder_style = DecoderStyle(decoder_s_config, phase_embedding_method, n_timeframes)
+
+        self = _steal_attributes_from_child(self, child="decoder_content", attributes=["upsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm"])
 
 
     def forward(self, z):
-       z_c, z_s = self.partition_z(z)
-       phased_z_s = self.phase_embedding(z)
-       avg_shape = self.decoder_content(z_c)
-       def_field_t = self.decoder_style(phased_z_s)
-       shape_t = avg_shape + def_field_t
-       return avg_shape, shape_t
+
+        bottleneck = self._partition_z(z["mu"], z["log_var"])
+        z_c, z_s = bottleneck["mu_c"], bottleneck["mu_s"]
+        avg_shape = self.decoder_content(z_c)
+        def_field_t = self.decoder_style(z_c, z_s, self.decoder_style.n_timeframes)
+        shape_t = avg_shape.unsqueeze(TIME_DIMENSION) + def_field_t
+        return avg_shape, shape_t
 
 
     def _partition_z(self, mu, log_var=None):
 
-        mu_c = mu[:, :self.z_c]
-        mu_s = mu[:, self.z_c:]
-        bottleneck = {"mu_s": mu_s, "mu_c": mu_c}
+        bottleneck = {"mu_c": mu[:, :self.latent_dim_content], "mu_s": mu[:, self.latent_dim_content:]}
 
         if log_var is not None:
-            log_var_c = log_var[:, :self.z_c]
-            log_var_s = log_var[:, self.z_c:]
-            bottleneck["log_var_c"] = log_var_c
-            bottleneck["log_var_s"] = log_var_s
+            bottleneck.update({
+                "log_var_c": log_var[:, :self.latent_dim_content],
+                "log_var_s": log_var[:, self.latent_dim_content:]
+            })
 
         return bottleneck
 
 
 class AutoencoderTemporalSequence(nn.Module):
 
-    def __init__(self,
-          num_features: int,
-          n_nodes: int,
-          num_conv_filters_enc: List[int],
-          num_conv_filters_dec_c: List[int],
-          num_conv_filters_dec_s: List[int],
-          polygon_order: int,
-          latent_dim_content: Union[int, None],
-          latent_dim_style: Union[int, None],
-          is_variational: bool,
-          downsample_matrices: List[torch.Tensor],
-          upsample_matrices: List[torch.Tensor],
-          adjacency_matrices: List[torch.Tensor],
-          z_aggr_function,
-          phase_input,
-          n_timeframes=None,
-          mode="testing"
-    	):
+    def __init__(self, enc_config, dec_c_config, dec_s_config, z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
 
-        self.encoder = EncoderTemporalSequence(
-            n_layers,
-            phase_input,
-            num_conv_filters_enc,
-            num_features,
-            adjacency_matrices,
-            downsample_matrices,
-            polygon_order,
-            is_variational,
-            latent_dim_content + latent_dim_style,
-            z_aggr_function
-        )
-
-        self.decoder = DecoderTemporalSequence(
-            latent_dim_content,
-            latent_dim_style,
-            n_layers,
-            num_conv_filters_dec_c,
-            num_conv_filters_dec_s,
-            upsample_matrices,
-            adjacency_matrices
-        )
+        super(AutoencoderTemporalSequence, self).__init__()
+        self.encoder = EncoderTemporalSequence(enc_config, z_aggr_function=z_aggr_function, n_timeframes=n_timeframes)
+        self.decoder = DecoderTemporalSequence(dec_c_config, dec_s_config, phase_embedding_method=phase_embedding_method)
 
 
-    def forward(self, x):
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        return x_hat
+    def forward(self, s_t):
+
+        z = self.encoder(s_t)
+        avg_s, shat_t = self.decoder(z)
+        return avg_s, shat_t

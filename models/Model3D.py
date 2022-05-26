@@ -85,7 +85,7 @@ class Encoder3DMesh(nn.Module):
         n_layers: int,
         n_nodes: int,
         is_variational: bool,
-        latent_dim_content: int, 
+        latent_dim: int,
         adjacency_matrices: List[torch.Tensor],
         downsample_matrices: List[torch.Tensor],
         activation_layers="ReLU"):
@@ -101,10 +101,8 @@ class Encoder3DMesh(nn.Module):
         self.downsample_matrices = downsample_matrices
 
         self._n_features_before_z = self.downsample_matrices[-1].shape[0] * self.filters_enc[-1]
-
         self._is_variational = is_variational
-
-        self.latent_dim = latent_dim_content
+        self.latent_dim = latent_dim
 
         self.A_edge_index, self.A_norm = self._build_adj_matrix()
 
@@ -335,7 +333,10 @@ class Decoder3DMesh(nn.Module):
 
         for i, layer in enumerate(self.layers):
             x = self.layers[layer]["activation_function"](x)
-            x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
+            try:
+                x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
+            except:
+                embed()
             x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
 
         return x
