@@ -222,7 +222,6 @@ class DecoderTemporalSequence(nn.Module):
 
     def forward(self, z):
 
-        embed()
         bottleneck = self._partition_z(z["mu"], z["log_var"])
         z_c, z_s = bottleneck["mu_c"], bottleneck["mu_s"]
         avg_shape = self.decoder_content(z_c)
