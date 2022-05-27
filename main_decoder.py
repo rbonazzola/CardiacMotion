@@ -16,31 +16,39 @@ import pprint
 
 from IPython import embed
 
-from models.Model import Encoder3DMesh
 from utils.helpers import get_coma_args
-from models.Model4D import EncoderTemporalSequence, ENCODER_ARGS
-from models.EncoderPLModule import CineComaEncoder
+from models.Model4D import DecoderTemporalSequence, DECODER_C_ARGS, DECODER_S_ARGS
+from models.lightning.DecoderLightningModule import TemporalDecoderLightning
+
 
 ###
 def main(config, trainer_args):
-    
+
     #
     dm = get_datamodule(config)
     coma_args = get_coma_args(config, dm)
-    coma_args["phase_input"] = False
 
-    enc_config = {k: v for k, v in coma_args.items() if k in ENCODER_ARGS}
+    dec_c_config = {k: v for k,v in coma_args.items() if k in DECODER_C_ARGS}
+    dec_s_config = {k: v for k,v in coma_args.items() if k in DECODER_S_ARGS}
 
-    cine_encoder = EncoderTemporalSequence(enc_config, z_aggr_function=config.network_architecture.z_aggr_function, n_timeframes=config.dataset.parameters.T)
-    PLEncoder = CineComaEncoder(cine_encoder, config)
+    cine_decoder = DecoderTemporalSequence(
+        dec_c_config, dec_s_config,
+        phase_embedding_method="exp",
+        n_timeframes=config.dataset.parameters.T
+    )
+
+    model = TemporalDecoderLightning(cine_decoder, config)
 
     if config.mlflow:
         if config.mlflow.experiment_name is None:
-            config.mlflow.experiment_name = "Encoder only"
+            config.mlflow.experiment_name = "Decoder only"
+        exp_info = {
+            "experiment_name": config.mlflow.experiment_name,
+            "artifact_location": config.mlflow.artifact_location
+        }
         trainer_args.logger = MLFlowLogger(
-            experiment_name=config.mlflow.experiment_name,
             tracking_uri=config.mlflow.tracking_uri,
-            artifact_location=config.mlflow.artifact_location
+            **exp_info,
         )
         mlflow.set_tracking_uri(config.mlflow.tracking_uri)
     else:
@@ -52,11 +60,10 @@ def main(config, trainer_args):
 
         mlflow.pytorch.autolog()
         try:
-            exp_id = mlflow.create_experiment(config.mlflow.experiment_name,
-                                              artifact_location=config.mlflow.artifact_location)
+            exp_id = mlflow.create_experiment(**exp_info)
         except:
             # If the experiment already exists, we can just retrieve its ID
-            exp_id = mlflow.get_experiment_by_name(config.mlflow.experiment_name).experiment_id
+            exp_id = mlflow.get_experiment_by_name(exp_info["experiment_name"]).experiment_id
 
         run_info = {
             "run_id": trainer.logger.run_id,
@@ -72,17 +79,18 @@ def main(config, trainer_args):
                 make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
                 mlflow.log_figure("comp_graph_network.png")
 
-            mlflow.log_params(get_mlflow_parameters(config))
-            mlflow.log_params(get_mlflow_dataset_params(config))
+            mlflow_params = get_mlflow_parameters(config)
+            mlflow_params.update(get_mlflow_dataset_params(config))
+            mlflow.log_params(mlflow_params)
             # mlflow.log_params(config.additional_mlflow_params)
 
-            trainer.fit(PLEncoder, datamodule=dm)
+            trainer.fit(TemporalDecoderLightning, datamodule=dm)
             trainer.test(datamodule=dm)  # Generates metrics for the full test dataset
             # trainer.predict(ckpt_path='best', datamodule=dm)  # Generates figures for a few samples
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
-        trainer.fit(PLEncoder, datamodule=dm)
-        result = trainer.test(datamodule=dm)
+        trainer.fit(TemporalDecoderLightning, datamodule=dm)
+        trainer.test(datamodule=dm)
 
 
 if __name__ == "__main__":

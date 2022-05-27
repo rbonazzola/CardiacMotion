@@ -129,20 +129,25 @@ def get_lightning_module(config, dm):
 def get_lightning_trainer(trainer_args):
 
     # trainer
-    trainer = pl.Trainer(
-        callbacks=[
+    trainer_kwargs = {
+        "callbacks": [
             EarlyStopping(monitor="val_loss", mode="min", patience=3),
             RichModelSummary(max_depth=-1)
         ],
-        gpus=[trainer_args.gpus],
-        auto_select_gpus=trainer_args.auto_select_gpus,
-        min_epochs=trainer_args.min_epochs, max_epochs=trainer_args.max_epochs,
-        auto_scale_batch_size=trainer_args.auto_scale_batch_size,
-        logger=trainer_args.logger,
-        precision=trainer_args.precision,
-        overfit_batches=trainer_args.overfit_batches,
-    )
+        "gpus": [trainer_args.gpus],
+        "auto_select_gpus": trainer_args.auto_select_gpus,
+        "min_epochs": trainer_args.min_epochs, "max_epochs": trainer_args.max_epochs,
+        "auto_scale_batch_size": trainer_args.auto_scale_batch_size,
+        "logger": trainer_args.logger,
+        "precision": trainer_args.precision,
+        "overfit_batches": trainer_args.overfit_batches,
+    }
 
+    try:
+        trainer = pl.Trainer(**trainer_kwargs)
+    except :
+        trainer_kwargs["gpus"] = None
+        trainer = pl.Trainer(**trainer_kwargs)
     return trainer
 
 
