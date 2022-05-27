@@ -145,7 +145,7 @@ def get_lightning_trainer(trainer_args):
 
     try:
         trainer = pl.Trainer(**trainer_kwargs)
-    except :
+    except:
         trainer_kwargs["gpus"] = None
         trainer = pl.Trainer(**trainer_kwargs)
     return trainer
