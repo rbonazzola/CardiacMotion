@@ -192,6 +192,7 @@ class DecoderStyle(nn.Module):
         return s_out
 
 
+
 class DecoderTemporalSequence(nn.Module):
 
     def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method, n_timeframes=None):
@@ -211,8 +212,17 @@ class DecoderTemporalSequence(nn.Module):
         self = _steal_attributes_from_child(self, child="decoder_content", attributes=["upsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm"])
 
 
+    def set_mode(self, mode: str):
+        '''
+        params:
+          mode: "training" or "testing"
+        '''
+        self._mode = mode
+
+
     def forward(self, z):
 
+        embed()
         bottleneck = self._partition_z(z["mu"], z["log_var"])
         z_c, z_s = bottleneck["mu_c"], bottleneck["mu_s"]
         avg_shape = self.decoder_content(z_c)
@@ -223,7 +233,10 @@ class DecoderTemporalSequence(nn.Module):
 
     def _partition_z(self, mu, log_var=None):
 
-        bottleneck = {"mu_c": mu[:, :self.latent_dim_content], "mu_s": mu[:, self.latent_dim_content:]}
+        bottleneck = {
+            "mu_c": mu[:, :self.latent_dim_content],
+            "mu_s": mu[:, self.latent_dim_content:]
+        }
 
         if log_var is not None:
             bottleneck.update({

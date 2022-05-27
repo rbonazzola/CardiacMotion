@@ -7,7 +7,7 @@ from copy import copy
 from typing import Sequence, Union, List
 from IPython import embed # left there for debugging if needed
 
-#TODO: Implement common parent class for encoder and decoder, to capture common behaviour.
+#TODO: Implement common parent class for encoder and decoder (GraphConvStack?), to capture common behaviour.
 
 ################# FULL AUTOENCODER #################
 

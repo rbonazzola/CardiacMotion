@@ -6,8 +6,9 @@ from PIL import Image
 import imageio
 import numpy as np
 
+from argparse import Namespace
 from IPython import embed # uncomment for debugging
-from models.model_c_and_s import Coma4D_C_and_S
+from models.Model4D import AutoencoderTemporalSequence
 from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
@@ -23,10 +24,10 @@ def mse(s1, s2=None):
 class CoMA(pl.LightningModule):
 
 
-    def __init__(self, model, params):
+    def __init__(self, model: AutoencoderTemporalSequence, params: Namespace):
 
         """
-        :param model: provide the PyTorch model.
+        :param model: PyTorch model.
         :param params: a Namespace with additional parameters
         """
 
@@ -43,12 +44,15 @@ class CoMA(pl.LightningModule):
         self.w_kl = self.params.loss.regularization.weight
         return losses_menu[self.params.loss.reconstruction_c.type.lower()]
 
-    # def get_loss(self):
-    #     return
-        
+            
     def KL_div(self, mu, log_var):
         return -0.5 * torch.mean(torch.mean(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
+    
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        return self.model(input, **kwargs)
+    
+    
     def on_fit_start(self):
 
         #TODO: check of alternatives since .to(device) is not recommended
@@ -64,12 +68,11 @@ class CoMA(pl.LightningModule):
             self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
             self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
 
-    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
-        return self.model(input, **kwargs)
-
+                    
     def on_train_epoch_start(self):
         self.model.set_mode("training")
 
+        
     def training_step(self, batch, batch_idx):
 
         # data, ids = batch
@@ -129,9 +132,11 @@ class CoMA(pl.LightningModule):
         # https://pytorch-lightning.readthedocs.io/en/latest/starter/introduction_guide.html#logging
         # self.log("my_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
+        
     def on_validation_epoch_start(self):
         self.model.set_mode("training")
 
+        
     def _shared_eval_step(self, batch, batch_idx):
 
         '''
@@ -169,6 +174,7 @@ class CoMA(pl.LightningModule):
                rec_ratio_to_pop_mean,\
                rec_ratio_to_pop_mean_c
 
+    
     def validation_step(self, batch, batch_idx):
 
         # loss_dict = self._shared_eval_step(batch, batch_idx)
@@ -190,6 +196,7 @@ class CoMA(pl.LightningModule):
         self.log_dict(loss_dict)
         return loss_dict
 
+    
     def validation_epoch_end(self, outputs):
 
         #TODO: iterate over keys of the elements of `outputs`
@@ -218,6 +225,7 @@ class CoMA(pl.LightningModule):
           logger=True
         )
 
+        
     def test_step(self, batch, batch_idx):
                 
         loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
@@ -259,6 +267,7 @@ class CoMA(pl.LightningModule):
 
         self.log_dict(loss_dict)
 
+        
     def predict_step(self, batch, batch_idx):
 
         s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
@@ -322,6 +331,7 @@ def merge_pngs_horizontally(png1, png2, output_png):
     new_image.paste(image2,(image1_size[0],0))
     new_image.save(output_png, "PNG")
 
+    
 def merge_gifs_horizontally(gif_file1, gif_file2, output_file):
 
     #Create reader object for the gif
