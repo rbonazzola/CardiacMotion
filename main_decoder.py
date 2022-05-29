@@ -17,8 +17,6 @@ import pprint
 from IPython import embed
 
 from utils.helpers import get_coma_args
-from models.Model4D import DecoderTemporalSequence, DECODER_C_ARGS, DECODER_S_ARGS
-from models.lightning.DecoderLightningModule import TemporalDecoderLightning
 
 
 ###
@@ -28,16 +26,9 @@ def main(config, trainer_args):
     dm = get_datamodule(config)
     coma_args = get_coma_args(config, dm)
 
-    dec_c_config = {k: v for k,v in coma_args.items() if k in DECODER_C_ARGS}
-    dec_s_config = {k: v for k,v in coma_args.items() if k in DECODER_S_ARGS}
 
-    cine_decoder = DecoderTemporalSequence(
-        dec_c_config, dec_s_config,
-        phase_embedding_method="exp",
-        n_timeframes=config.dataset.parameters.T
-    )
 
-    model = TemporalDecoderLightning(cine_decoder, config)
+    else:
 
     if config.mlflow:
         if config.mlflow.experiment_name is None:
@@ -84,12 +75,12 @@ def main(config, trainer_args):
             mlflow.log_params(mlflow_params)
             # mlflow.log_params(config.additional_mlflow_params)
 
-            trainer.fit(cine_decoder, datamodule=dm)
+            trainer.fit(model, datamodule=dm)
             trainer.test(datamodule=dm)  # Generates metrics for the full test dataset
             # trainer.predict(ckpt_path='best', datamodule=dm)  # Generates figures for a few samples
             # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
     else:
-        trainer.fit(TemporalDecoderLightning, datamodule=dm)
+        trainer.fit(model, datamodule=dm)
         trainer.test(datamodule=dm)
 
 
@@ -134,5 +125,6 @@ if __name__ == "__main__":
         pp.pprint(to_dict(config))
         if args.dry_run:
             exit()
+
     print(config.mlflow)
     main(config, trainer_args)

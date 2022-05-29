@@ -114,15 +114,46 @@ def get_coma_args(config, dm):
 
 def get_lightning_module(config, dm):
 
-    from models.Model4D import AutoencoderTemporalSequence
-    from models.lightning.ComaLightningModule import CoMA
-
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
-    coma4D = AutoencoderTemporalSequence(**coma_args)
 
-    # Initialize PyTorch Lightning module
-    model = CoMA(coma4D, config)
+    if config.only_decoder:
+
+        from models.Model4D import DecoderTemporalSequence, DECODER_C_ARGS, DECODER_S_ARGS
+        from models.lightning.DecoderLightningModule import TemporalDecoderLightning
+
+        dec_c_config = {k: v for k,v in coma_args.items() if k in DECODER_C_ARGS}
+        dec_s_config = {k: v for k,v in coma_args.items() if k in DECODER_S_ARGS}
+
+        decoder = DecoderTemporalSequence(
+            dec_c_config, dec_s_config,
+            phase_embedding_method="exp",
+            n_timeframes=config.dataset.parameters.T
+        )
+
+        model = TemporalDecoderLightning(decoder, config)
+
+    elif config.only_encoder:
+
+        from models.Model4D import EncoderTemporalSequence, ENCODER_ARGS
+        from models.lightning.EncoderLightningModule import TemporalEncoderLightning
+
+        enc_config = {k: v for k, v in coma_args.items() if k in ENCODER_ARGS}
+
+        encoder = EncoderTemporalSequence(
+            enc_config, z_aggr_function=config.network_architecture.z_aggr_function,
+            n_timeframes=config.dataset.parameters.T
+        )
+
+        model = TemporalEncoderLightning(encoder, config)
+
+    else:
+        from models.Model4D import AutoencoderTemporalSequence
+        from models.lightning.ComaLightningModule import CoMA
+        autoencoder = AutoencoderTemporalSequence(**coma_args)
+        # Initialize PyTorch Lightning module
+        model = CoMA(autoencoder, config)
+
     return model
 
 

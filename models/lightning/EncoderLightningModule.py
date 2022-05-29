@@ -21,7 +21,7 @@ def mse(s1, s2=None):
     return ((s1-s2)**2).sum(-1).mean(-1)
 
 
-class CineComaEncoder(pl.LightningModule):
+class TemporalEncoderLightning(pl.LightningModule):
 
     def __init__(self, model, params):
 
@@ -30,7 +30,7 @@ class CineComaEncoder(pl.LightningModule):
         :param params: a Namespace with additional parameters
         """
 
-        super(CineComaEncoder, self).__init__()
+        super(TemporalEncoderLightning, self).__init__()
         self.model = model
         self.params = params
 

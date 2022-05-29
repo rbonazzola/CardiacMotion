@@ -1,7 +1,6 @@
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
 import mlflow.pytorch
-from mlflow.tracking import MlflowClient
 
 from config.cli_args import CLI_args, overwrite_config_items
 
@@ -16,7 +15,6 @@ import pprint
 
 from IPython import embed
 
-from models.Model import Encoder3DMesh
 from utils.helpers import get_coma_args
 from models.Model4D import EncoderTemporalSequence, ENCODER_ARGS
 from models.EncoderPLModule import CineComaEncoder
