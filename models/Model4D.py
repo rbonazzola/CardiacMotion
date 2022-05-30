@@ -57,7 +57,7 @@ class EncoderTemporalSequence(nn.Module):
         encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
         self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
 
-        self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["downsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm", "latent_dim"])
+        self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["matrices"])
 
         self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
         self.phase_embedding = phase_embedding
@@ -209,7 +209,7 @@ class DecoderTemporalSequence(nn.Module):
         self.decoder_content = Decoder3DMesh(**decoder_c_config)
         self.decoder_style = DecoderStyle(decoder_s_config, phase_embedding_method, n_timeframes)
 
-        self = _steal_attributes_from_child(self, child="decoder_content", attributes=["upsample_matrices", "adjacency_matrices", "A_edge_index", "A_norm"])
+        self = _steal_attributes_from_child(self, child="decoder_content", attributes=["matrices"])
 
 
     def set_mode(self, mode: str):

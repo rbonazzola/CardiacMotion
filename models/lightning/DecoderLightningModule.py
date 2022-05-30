@@ -102,15 +102,9 @@ class TemporalDecoderLightning(pl.LightningModule):
         #This is the most elegant way I found so far to transfer the tensors to the right device
         #(if this is run within __init__, I get self.device=="cpu" even when I use a GPU, so it doesn't work there)
 
-        for i, _ in enumerate(self.model.upsample_matrices):
-            self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
-            # self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
-            self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
-
-        for i, _ in enumerate(self.model.A_edge_index):
-            self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
-            self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
-
+        for matrix_type in ["upsample", "A_edge_index", "A_norm"]:
+             for i, _ in enumerate(self.model.matrices["upsample"]):
+                self.model.matrices[matrix_type][i] = self.model.matrices[matrix_type][i].to(self.device)
 
     def on_train_epoch_start(self):
         self.model.set_mode("training")

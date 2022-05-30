@@ -68,14 +68,16 @@ class Encoder3DMesh(nn.Module):
         self.filters_enc = copy(num_conv_filters_enc)
         self.filters_enc.insert(0, num_features)
         self.K = cheb_polynomial_order
-        self.adjacency_matrices = adjacency_matrices
-        self.downsample_matrices = downsample_matrices
 
-        self._n_features_before_z = self.downsample_matrices[-1].shape[0] * self.filters_enc[-1]
+        self.matrices = {}
+        A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
+        self.matrices["A_edge_index"] = list(reversed(A_edge_index))
+        self.matrices["A_norm"] = list(reversed(A_norm))
+        self.matrices["downsample"] = list(reversed(downsample_matrices))
+
+        self._n_features_before_z = self.matrices["downsample"][-1].shape[0] * self.filters_enc[-1]
         self._is_variational = is_variational
         self.latent_dim = latent_dim
-
-        self.A_edge_index, self.A_norm = self._build_adj_matrix()
 
         self.activation_layers = [activation_layers] * n_layers if isinstance(activation_layers, str) else activation_layers
         self.layers = self._build_encoder()
@@ -89,7 +91,7 @@ class Encoder3DMesh(nn.Module):
     def _build_encoder(self):
 
         cheb_conv_layers = self._build_cheb_conv_layers(self.filters_enc, self.K)
-        pool_layers = self._build_pool_layers(self.downsample_matrices)
+        pool_layers = self._build_pool_layers(self.matrices["downsample"])
         activation_layers = self._build_activation_layers(self.activation_layers)
 
         encoder = ModuleDict()
@@ -148,9 +150,9 @@ class Encoder3DMesh(nn.Module):
         return cheb_enc
 
 
-    def _build_adj_matrix(self):
+    def _build_adj_matrix(self, adjacency_matrices):
         adj_edge_index, adj_norm = zip(*[
-            ChebConv_Coma.norm(self.adjacency_matrices[i]._indices(), self.n_nodes[i])
+            ChebConv_Coma.norm(adjacency_matrices[i]._indices(), self.n_nodes[i])
             for i in range(len(self.n_nodes))
         ])
         return list(adj_edge_index), list(adj_norm)
@@ -165,8 +167,8 @@ class Encoder3DMesh(nn.Module):
 
         # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
-            x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
-            x = self.layers[layer]["pool"](x, self.downsample_matrices[i])
+            x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
+            x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
             x = self.layers[layer]["activation_function"](x)
         
         x = self.concatenate_graph_features(x)
@@ -212,14 +214,14 @@ class Decoder3DMesh(nn.Module):
         self.filters_dec = list(reversed(self.filters_dec))
 
         self.K = cheb_polynomial_order
-        self.adjacency_matrices = adjacency_matrices
-        self.A_edge_index, self.A_norm = self._build_adj_matrix()
-        self.A_edge_index = list(reversed(self.A_edge_index))
-        self.A_norm = list(reversed(self.A_norm))
 
-        self.upsample_matrices = list(reversed(upsample_matrices))
+        self.matrices = {}
+        A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
+        self.matrices["A_edge_index"] = list(reversed(A_edge_index))
+        self.matrices["A_norm"] = list(reversed(A_norm))
+        self.matrices["upsample"] = list(reversed(upsample_matrices))
 
-        self._n_features_before_z = self.upsample_matrices[0].shape[1] * self.filters_dec[0]
+        self._n_features_before_z = self.matrices["upsample"][0].shape[1] * self.filters_dec[0]
 
         self._is_variational = is_variational
         self.latent_dim = latent_dim
@@ -235,7 +237,7 @@ class Decoder3DMesh(nn.Module):
     def _build_decoder(self):
 
         cheb_conv_layers = self._build_cheb_conv_layers(self.filters_dec, self.K)
-        pool_layers = self._build_pool_layers(self.upsample_matrices)
+        pool_layers = self._build_pool_layers(self.matrices["upsample"])
         activation_layers = self._build_activation_layers(self.activation_layers)
 
         decoder = ModuleDict()
@@ -288,9 +290,9 @@ class Decoder3DMesh(nn.Module):
         return cheb_dec
 
 
-    def _build_adj_matrix(self):
+    def _build_adj_matrix(self, adjacency_matrices):
         adj_edge_index, adj_norm = zip(*[
-            ChebConv_Coma.norm(self.adjacency_matrices[i]._indices(), self.n_nodes[i])
+            ChebConv_Coma.norm(adjacency_matrices[i]._indices(), self.n_nodes[i])
             for i in range(len(self.n_nodes))
         ])
         return list(adj_edge_index), list(adj_norm)
@@ -304,7 +306,7 @@ class Decoder3DMesh(nn.Module):
 
         for i, layer in enumerate(self.layers):
             x = self.layers[layer]["activation_function"](x)
-            x = self.layers[layer]["pool"](x, self.upsample_matrices[i])
-            x = self.layers[layer]["graph_conv"](x, self.A_edge_index[i], self.A_norm[i])
+            x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
+            x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
 
         return x
