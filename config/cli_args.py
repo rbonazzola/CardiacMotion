@@ -78,11 +78,9 @@ network_architecture_args = {
         "dest": "config.network_architecture.z_aggr_function"},
     ("--only_decoder",): {
         "help": "Flag to run only the decoder",
-        "type": bool,
         "action": "store_true"},
     ("--only_encoder",): {
         "help": "Flag to run only the encoder",
-        "type": bool,
         "action": "store_true"},
 
     #("--phase_input" ): {

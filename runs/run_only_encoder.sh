@@ -7,14 +7,15 @@ Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
 sleep 3
 
 # N_CHANNELS="16 32 64 128"
-# N_CHANNELS="16 32 64 64"
-N_CHANNELS="128 128 128 128"
+N_CHANNELS="16 32 64 64"
+# N_CHANNELS="128 128 128 128"
 
-python main_encoder.py \
+((nvidia-smi &> /dev/null) && export DEVICE=${GPU_DEVICE:-0}) || export DEVICE="cpu"
+
+python main.py \
   -c config_files/config_folded_c_and_s.yaml \
+  --only_encoder \
   --n_channels_enc $N_CHANNELS \
-  --latent_dim_c 32 \
-  --latent_dim_s 64 \
   --w_kl 0 \
   --batch_size 512 \
   --z_aggr_function "DFT" \

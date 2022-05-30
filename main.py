@@ -1,14 +1,14 @@
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
+
 import mlflow
 from mlflow.tracking import MlflowClient
 
 from config.cli_args import CLI_args, overwrite_config_items
+from config.load_config import load_yaml_config, to_dict
 
 from utils.helpers import *
-from torchviz import make_dot
-
-from config.load_config import load_yaml_config, to_dict
+from utils.mlflow_helpers import get_mlflow_parameters, get_mlflow_dataset_params
 
 import os
 import argparse
@@ -22,8 +22,6 @@ def main(config, trainer_args):
     #
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
-
-    # gg = hl.build_graph(model, next(iter(dm.train_dataloader()))[0] )
 
     if config.mlflow:
 
@@ -46,12 +44,15 @@ def main(config, trainer_args):
         mlflow.start_run(**run_info)
             
         if config.log_computational_graph:
+            from torchviz import make_dot
             yhat = model(next(iter(dm.train_dataloader()))[0])
             make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
             mlflow.log_figure("comp_graph_network.png")
 
         mlflow_params = get_mlflow_parameters(config)
-        mlflow_params.update(get_mlflow_dataset_params(config))
+        mlflow_dataset_params = get_mlflow_dataset_params(config)
+        mlflow_params.update(mlflow_dataset_params)
+
         mlflow.log_params(mlflow_params)
         # mlflow.log_params(config.additional_mlflow_params)
 
@@ -74,7 +75,7 @@ if __name__ == "__main__":
     for k, v in CLI_args.items():
         parser.add_argument(*k, **v)
 
-    # add arguments specific to the PyTorch Lightning trainer.
+    # adding arguments specific to the PyTorch Lightning trainer.
     parser = pl.Trainer.add_argparse_args(parser)
 
     args = parser.parse_args()
@@ -95,8 +96,6 @@ if __name__ == "__main__":
     #TOFIX: args contains other arguments that do not correspond to the trainer
     trainer_args = args
 
-
-      
     if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)
         pp.pprint(to_dict(config))
@@ -108,10 +107,11 @@ if __name__ == "__main__":
     if args.disable_mlflow_logging:
         config.mlflow = None
 
+
     if config.mlflow:
 
         if config.mlflow.experiment_name is None:
-            config.mlflow.experiment_name = "Decoder only"
+            config.mlflow.experiment_name = "rbonazzola - Default"
 
         exp_info = {
             "experiment_name": config.mlflow.experiment_name,
@@ -127,5 +127,19 @@ if __name__ == "__main__":
 
     else:
         trainer_args.logger = None
+
+    
+    if hasattr(args, "only_decoder"):
+        config.only_decoder = args.only_decoder
+        config.mlflow.experiment_name = "rbonazzola - decoder only"
+    elif hasattr(args, "only_encoder"):
+        config.only_encoder = args.only_encoder
+        config.mlflow.experiment_name = "rbonazzola - encoder only"
+
+    if config.only_decoder or config.only_encoder:
+        d = config.dataset
+        config.network_architecture.latent_dim_c = (d.parameters.l_max + 1) ** 2
+        config.network_architecture.latent_dim_s = ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max
+        print(config)
 
     main(config, trainer_args)

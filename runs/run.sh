@@ -10,6 +10,8 @@ sleep 3
 # N_CHANNELS="16 32 64 64"
 N_CHANNELS="128 128 128 128"
 
+((nvidia-smi &> /dev/null) && export DEVICE=${GPU_DEVICE:0}) || export DEVICE="cpu"
+
 python main.py \
   -c config_files/config_folded_c_and_s.yaml \
   --n_channels_enc $N_CHANNELS \

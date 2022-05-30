@@ -10,11 +10,12 @@ sleep 3
 N_CHANNELS="16 32 64 64"
 # N_CHANNELS="128 128 128 128"
 
-python main_decoder.py \
+((nvidia-smi &> /dev/null) && export DEVICE=${GPU_DEVICE:-0}) || export DEVICE="cpu"
+
+python main.py \
   -c config_files/config_folded_c_and_s.yaml \
+  --only_decoder \
   --n_channels_enc $N_CHANNELS \
-  --latent_dim_c 32 \
-  --latent_dim_s 64 \
   --w_kl 0 \
   --batch_size 512 \
   --z_aggr_function "DFT" \
