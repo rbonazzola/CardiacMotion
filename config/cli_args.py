@@ -71,6 +71,19 @@ network_architecture_args = {
         "type": str,
         "action": ArgumentAction,
         "dest": "config.network_architecture.z_aggr_function"},
+    ("--z_aggr_function",): {
+        "help": "Temporal aggregation method",
+        "type": str,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.z_aggr_function"},
+    ("--only_decoder",): {
+        "help": "Flag to run only the decoder",
+        "type": bool,
+        "action": "store_true"},
+    ("--only_encoder",): {
+        "help": "Flag to run only the encoder",
+        "type": bool,
+        "action": "store_true"},
 
     #("--phase_input" ): {
     #    "help": "If this flag is set, the phase embedding is not applied to the input mesh coordinates.",
