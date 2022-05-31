@@ -306,7 +306,14 @@ class Decoder3DMesh(nn.Module):
 
         for i, layer in enumerate(self.layers):
             x = self.layers[layer]["activation_function"](x)
-            x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
-            x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
+            try:
+                x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
+                x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
+            except RuntimeError:
+                self.matrices["upsample"][i] = self.matrices["upsample"][i].to(x.device)
+                self.matrices["A_edge_index"][i] = self.matrices["A_edge_index"][i].to(x.device)
+                self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
+                x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
+                x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
 
         return x
