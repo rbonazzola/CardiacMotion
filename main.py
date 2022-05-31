@@ -96,12 +96,6 @@ if __name__ == "__main__":
     #TOFIX: args contains other arguments that do not correspond to the trainer
     trainer_args = args
 
-    if args.show_config or args.dry_run:
-        pp = pprint.PrettyPrinter(indent=2, compact=True)
-        pp.pprint(to_dict(config))
-        if args.dry_run:
-            exit()
-
 
     config.log_computational_graph = args.log_computational_graph
     if args.disable_mlflow_logging:
@@ -131,15 +125,25 @@ if __name__ == "__main__":
     
     if hasattr(args, "only_decoder"):
         config.only_decoder = args.only_decoder
-        config.mlflow.experiment_name = "rbonazzola - decoder only"
+        if config.mlflow:
+            config.mlflow.experiment_name = "rbonazzola - decoder only"
     elif hasattr(args, "only_encoder"):
         config.only_encoder = args.only_encoder
-        config.mlflow.experiment_name = "rbonazzola - encoder only"
+        if config.mlflow:
+            config.mlflow.experiment_name = "rbonazzola - encoder only"
 
     if config.only_decoder or config.only_encoder:
         d = config.dataset
         config.network_architecture.latent_dim_c = (d.parameters.l_max + 1) ** 2
         config.network_architecture.latent_dim_s = ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max
         print(config)
+
+    
+    if args.show_config or args.dry_run:
+        pp = pprint.PrettyPrinter(indent=2, compact=True)
+        pp.pprint(to_dict(config))
+        if args.dry_run:
+            exit()
+
 
     main(config, trainer_args)
