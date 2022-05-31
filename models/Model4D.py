@@ -18,13 +18,18 @@ FEATURE_DIMENSION = 3
 def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], str]):
 
     '''
-       Make attributes from an object's child visible from the object's namespace
+       Make attributes from an object's child visible from the (parent) object's namespace
     '''
 
     child = getattr(self, child)
+
+    if isinstance(attributes, str):
+        attributes = [attributes]
+
     for attribute in attributes:
         setattr(self, attribute, getattr(child, attribute))
     return self
+
 
 COMMON_ARGS = [
     "num_features",
@@ -34,6 +39,7 @@ COMMON_ARGS = [
     "is_variational",
     "adjacency_matrices",
     "activation_layers",
+    "template",
 ]
 
 ##########################################################################################
@@ -202,6 +208,7 @@ class DecoderTemporalSequence(nn.Module):
         decoder_c_config = copy(decoder_c_config)
         decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
         decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
+        self.template_mesh = decoder_c_config["template"]
 
         self.latent_dim_content = decoder_c_config["latent_dim"]
         self.latent_dim_style = decoder_s_config["latent_dim_style"]
