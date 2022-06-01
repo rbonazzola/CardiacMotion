@@ -189,7 +189,8 @@ DECODER_ARGS = [
     "is_variational",
     "upsample_matrices",
     "adjacency_matrices",
-    "activation_layers"
+    "activation_layers",
+    "template"
 ]
 
 class Decoder3DMesh(nn.Module):
@@ -202,6 +203,7 @@ class Decoder3DMesh(nn.Module):
         cheb_polynomial_order: int,
         latent_dim: int,
         is_variational: bool,
+        template,
         upsample_matrices: List[torch.Tensor],
         adjacency_matrices: List[torch.Tensor],
         activation_layers="ReLU"):

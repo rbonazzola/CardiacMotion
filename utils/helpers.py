@@ -172,6 +172,7 @@ def get_lightning_trainer(trainer_args):
         "logger": trainer_args.logger,
         "precision": trainer_args.precision,
         "overfit_batches": trainer_args.overfit_batches,
+        "limit_test_batches": trainer_args.limit_test_batches
     }
 
     try:

@@ -274,7 +274,7 @@ class SyntheticMeshPopulation(object):
         plotter.screenshot(filename if filename.endswith("png") else filename + ".png")
 
 
-    def _generate_gif(self, mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
+    def _generate_gif(mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
         
         '''
         Produces a gif file representing the motion of the input mesh.
@@ -303,7 +303,7 @@ class SyntheticMeshPopulation(object):
         try:
             # if mesh3D is torch.Tensor, this your should run OK
             mesh4D = mesh4D.cpu().numpy()[0]
-        except:
+        except AttributeError:
             pass
 
         kk = pv.PolyData(mesh4D[0], connectivity)
