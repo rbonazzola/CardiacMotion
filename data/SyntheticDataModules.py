@@ -6,6 +6,7 @@ from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 import pytorch_lightning as pl
 import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
+from PIL import Image
 
 from IPython import embed
 
@@ -115,7 +116,7 @@ class SyntheticMeshesDM(pl.LightningDataModule):
             if split_fractions is not None:
                 self.split_fractions = split_fractions 
             else:
-                self.split_fractions = [0.6, 0.2, 0.2]
+                self.split_fractions = [0.7, 0.2, 0.1]
 
 
     def setup(self, stage: Optional[str] = None):

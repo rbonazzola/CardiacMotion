@@ -27,6 +27,7 @@ python main.py \
   --dataset.mesh_resolution 6 \
   --dataset.amplitude_static_max 0.2 \
   --dataset.amplitude_dynamic_max 0.1 \
+  --dataset.center_around_mean 1 \
   --dataset.freq_max 2 \
   --dataset.l_max 2 \
   --gpus ${GPU_DEVICE:-0} \

@@ -3,10 +3,14 @@ import torch
 import torch.nn.functional as F
 from argparse import Namespace
 
+import numpy as np
+from PIL import Image
+import imageio
+
 from typing import List, Mapping
 from IPython import embed # uncomment for debugging
 from models.Model4D import  DecoderTemporalSequence
-# from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
+from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -187,9 +191,10 @@ class TemporalDecoderLightning(pl.LightningModule):
         ### ANIMATIONS OF MOVING MESH
         if self.params.dataset.preprocessing.center_around_mean:
             s_t = s_t.cpu() + self.model.template_mesh.v
-            s_hat_t = s_hat_t.cpu() + self.model.template_mesh.v
-            SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
-            SyntheticMeshPopulation._generate_gif(s_hat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+            shat_t = shat_t.cpu() + self.model.template_mesh.v
+
+        SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
+        SyntheticMeshPopulation._generate_gif(shat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
 
         merge_gifs_horizontally(
             f"moving_mesh_{batch_idx}_orig.gif", 
