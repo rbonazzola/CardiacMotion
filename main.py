@@ -19,7 +19,9 @@ from IPython import embed
 ###
 def main(config, trainer_args):
 
-    #
+    '''
+
+    '''
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
 
@@ -136,8 +138,6 @@ if __name__ == "__main__":
         d = config.dataset
         config.network_architecture.latent_dim_c = (d.parameters.l_max + 1) ** 2
         config.network_architecture.latent_dim_s = ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max
-        print(config)
-
     
     if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)

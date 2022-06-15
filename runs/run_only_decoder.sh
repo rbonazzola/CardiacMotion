@@ -7,8 +7,8 @@ Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
 sleep 3
 
 # N_CHANNELS="16 32 64 128"
-N_CHANNELS="16 32 64 64"
-# N_CHANNELS="128 128 128 128"
+# N_CHANNELS="16 32 64 64"
+N_CHANNELS="512 256 128 128"
 
 ((nvidia-smi &> /dev/null) && export DEVICE=${GPU_DEVICE:-0}) || export DEVICE="cpu"
 
@@ -19,17 +19,17 @@ python main.py \
   --n_channels_dec_c $N_CHANNELS \
   --n_channels_dec_s $N_CHANNELS \
   --w_kl 0 \
-  --batch_size 256 \
+  --batch_size 32 \
   --z_aggr_function "DFT" \
-  --learning_rate 0.0001 \
+  --learning_rate 0.0003 \
   --dataset.N_subjects 5120 \
-  --dataset.N_timeframes 50 \
-  --dataset.mesh_resolution 6 \
+  --dataset.N_timeframes 20 \
+  --dataset.mesh_resolution 10 \
   --dataset.amplitude_static_max 0.2 \
   --dataset.amplitude_dynamic_max 0.1 \
   --dataset.center_around_mean 1 \
-  --dataset.freq_max 2 \
-  --dataset.l_max 2 \
+  --dataset.freq_max 4 \
+  --dataset.l_max 4 \
   --gpus ${GPU_DEVICE:-0} \
   $@
 

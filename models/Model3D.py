@@ -36,6 +36,7 @@ ENCODER_ARGS = [
     "num_conv_filters_enc",
     "cheb_polynomial_order",
     "latent_dim_content",
+    "template",
     "is_variational",
     "phase_input",
     "downsample_matrices",
@@ -57,6 +58,7 @@ class Encoder3DMesh(nn.Module):
         n_nodes: int,
         is_variational: bool,
         latent_dim: int,
+        template,
         adjacency_matrices: List[torch.Tensor],
         downsample_matrices: List[torch.Tensor],
         activation_layers="ReLU"):
@@ -167,8 +169,19 @@ class Encoder3DMesh(nn.Module):
 
         # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
+            
+            if self.matrices["downsample"][i].device != x.device:
+                self.matrices["downsample"][i] = self.matrices["upsample"][i].to(x.device)
+            if self.matrices["A_edge_index"][i].device != x.device:
+                self.matrices["A_edge_index"][i] = self.matrices["A_edge_index"][i].to(x.device)
+            if self.matrices["A_norm"][i].device != x.device:
+                self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
+  
             x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
-            x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
+            try:
+                x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
+            except:
+                embed()
             x = self.layers[layer]["activation_function"](x)
         
         x = self.concatenate_graph_features(x)
@@ -307,15 +320,16 @@ class Decoder3DMesh(nn.Module):
         x = x.reshape(batch_size, -1, self.layers["layer_0"]["graph_conv"].in_channels)
 
         for i, layer in enumerate(self.layers):
-            x = self.layers[layer]["activation_function"](x)
-            try:
-                x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
-                x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
-            except RuntimeError:
+            
+            if self.matrices["upsample"][i].device != x.device:
                 self.matrices["upsample"][i] = self.matrices["upsample"][i].to(x.device)
+            if self.matrices["A_edge_index"][i].device != x.device:
                 self.matrices["A_edge_index"][i] = self.matrices["A_edge_index"][i].to(x.device)
+            if self.matrices["A_norm"][i].device != x.device:
                 self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
-                x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
-                x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
+
+            x = self.layers[layer]["activation_function"](x)
+            x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
+            x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
 
         return x
