@@ -61,6 +61,7 @@ class EncoderTemporalSequence(nn.Module):
         super(EncoderTemporalSequence, self).__init__()
         encoder_config = copy(encoder_config)
         encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
+        self.latent_dim = encoder_config["latent_dim"]
         self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
 
         self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["matrices"])

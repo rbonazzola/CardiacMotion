@@ -1,8 +1,10 @@
 seed: null
-batch_size: 16
+batch_size: 256
 dataset: "dataset/default_synthetic.yaml"
 sample_sizes: { training: 0.6, validation: 0.2, testing: 0.2 }
 network_architecture: "network_architecture/default_c_and_s.yaml"
 loss: "loss/default.yaml"
 optimizer: "optimizer/default_adam.yaml"
-mlflow: "mlflow/default_local.yaml"
+mlflow: "mlflow/default_s3.yaml"
+only_decoder: null
+only_encoder: null

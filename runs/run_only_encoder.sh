@@ -17,15 +17,16 @@ python main.py \
   --only_encoder \
   --n_channels_enc $N_CHANNELS \
   --w_kl 0 \
-  --batch_size 512 \
+  --batch_size 32 \
   --z_aggr_function "DFT" \
   --learning_rate 0.00001 \
   --dataset.N_subjects 5120 \
-  --dataset.N_timeframes 4 \
+  --dataset.N_timeframes 20 \
   --dataset.amplitude_static_max 0.2 \
   --dataset.amplitude_dynamic_max 0.1 \
+  --dataset.center_around_mean 1 \
   --dataset.freq_max 2 \
-  --dataset.l_max 1 \
+  --dataset.l_max 2 \
   --gpus ${GPU_DEVICE:-0} \
   $@
 

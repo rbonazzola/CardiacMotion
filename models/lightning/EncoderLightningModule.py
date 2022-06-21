@@ -10,6 +10,8 @@ from IPython import embed # uncomment for debugging
 # from models.Model4D import  EncoderTemporalSequence
 # from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
+from image_helpers import *
+
 losses_menu = {
   "l1": F.l1_loss,
   "mse": F.mse_loss
@@ -50,14 +52,9 @@ class TemporalEncoderLightning(pl.LightningModule):
         #This is the most elegant way I found so far to transfer the tensors to the right device
         #(if this is run within __init__, I get self.device=="cpu" even when I use a GPU, so it doesn't work there)
 
-        for i, _ in enumerate(self.model.downsample_matrices):
-            self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
-            # self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
-            self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
-
-        for i, _ in enumerate(self.model.A_edge_index):
-            self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
-            self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
+        for matrix_type in ["downsample", "A_edge_index", "A_norm"]:
+            for i, _ in enumerate(self.model.matrices["downsample"]):
+                self.model.matrices[matrix_type][i] = self.model.matrices[matrix_type][i].to(self.device)
 
 
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
