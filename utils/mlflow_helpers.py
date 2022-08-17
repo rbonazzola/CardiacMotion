@@ -2,7 +2,9 @@ from subprocess import check_output
 
 def get_mlflow_parameters(config):
     loss = config.loss
+
     net = config.network_architecture
+
     loss_params = {
         "w_kl": loss.regularization.weight,
         "w_s": loss.reconstruction_s.weight
@@ -35,7 +37,13 @@ def get_mlflow_dataset_params(config):
     '''
     d = config.dataset
 
-    mlflow_dataset_params = {
+    if d.data_type == "cardiac":
+        mlflow_dataset_params {
+          "dataset_type": "cardiac"
+        }
+
+    elif d.data_type == "synthetic":
+        mlflow_dataset_params = {
         "dataset_type": "synthetic",
         "dataset_max_static_amplitude": d.parameters.amplitude_static_max,
         "dataset_max_dynamic_amplitude": d.parameters.amplitude_dynamic_max,
@@ -50,6 +58,13 @@ def get_mlflow_dataset_params(config):
         "dataset_template": "icosphere",  # TODO: add this as parameter in the configuration
         "dataset_center_around_mean": d.preprocessing.center_around_mean
     }
+
+    mlflow_dataset_params.update({
+        "n_training": config.sample_sizes[0],
+        "n_validation": config.sample_sizes[1],
+        "n_test": config.sample_sizes[2],
+        "dataset_center_around_mean": False
+    })
 
     return mlflow_dataset_params
 
