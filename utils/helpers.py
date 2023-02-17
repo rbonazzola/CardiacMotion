@@ -13,6 +13,8 @@ from utils.mesh_operations import Mesh
 
 import pickle as pkl
 
+from easydict import EasyDict
+
 def scipy_to_torch_sparse(scp_matrix):
 
     import numpy as np
@@ -109,7 +111,8 @@ def get_coma_args(config, dm):
 
     matrices = get_coma_matrices(config, dm, from_cached=False)
     coma_args.update(matrices)
-    return coma_args
+
+    return EasyDict(coma_args)
 
 
 def get_lightning_module(config, dm):
@@ -149,10 +152,24 @@ def get_lightning_module(config, dm):
 
     else:
         from models.Model4D import AutoencoderTemporalSequence
-        from models.lightning.ComaLightningModule import CoMA
-        autoencoder = AutoencoderTemporalSequence(**coma_args)
+        from models.lightning.ComaLightningModule import CoMA_Lightning
+        from models.Model4D import EncoderTemporalSequence, ENCODER_ARGS
+        from models.Model4D import DecoderTemporalSequence, DECODER_C_ARGS, DECODER_S_ARGS
+        
+        enc_config = {k: v for k, v in coma_args.items() if k in ENCODER_ARGS}
+        dec_c_config = {k: v for k,v in coma_args.items() if k in DECODER_C_ARGS}
+        dec_s_config = {k: v for k,v in coma_args.items() if k in DECODER_S_ARGS}
+        
+        autoencoder = AutoencoderTemporalSequence(
+            enc_config, 
+            dec_c_config, 
+            dec_s_config,
+            z_aggr_function=coma_args.z_aggr_function,
+            n_timeframes=coma_args.n_timeframes        
+        )
+        
         # Initialize PyTorch Lightning module
-        model = CoMA(autoencoder, config)
+        model = CoMA_Lightning(autoencoder, config)
 
     return model
 

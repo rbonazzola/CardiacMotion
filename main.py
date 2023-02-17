@@ -93,6 +93,7 @@ if __name__ == "__main__":
         config = overwrite_config_items(ref_config, config_to_replace)
     except AttributeError:
         # If there are no elements to replace
+        config = ref_config
         pass
 
     #TOFIX: args contains other arguments that do not correspond to the trainer

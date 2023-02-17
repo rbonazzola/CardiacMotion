@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import pickle as pkl
 from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 from PIL import Image
+from easydict import EasyDict
 
 from IPython import embed
 
@@ -34,7 +35,7 @@ class SyntheticMeshesDataset(Dataset):
     def __getitem__(self, index):
         
         ''' 
-        return:
+        return: a dictionary of:
           the set of moving meshes for an individual, 
           the time-averaged mesh, 
           the MSE of the moving meshes with respect to the time-averaged mesh,
@@ -43,10 +44,14 @@ class SyntheticMeshesDataset(Dataset):
 
         ref_shape = np.array(self.mesh_popu.template.vertices)
         
-        moving_meshes = self.mesh_popu.moving_meshes[index]
-        time_avg_mesh = self.mesh_popu.time_avg_meshes[index]
-        dev_from_tmp_avg = np.array([ mse(moving_meshes[j], time_avg_mesh) for j, _ in enumerate(moving_meshes) ])
-        dev_from_sphere = np.array([ mse(moving_meshes[j], ref_shape) for j, _ in enumerate(moving_meshes) ])
+        # s_t: moving_meshes
+        
+        s_t = self.mesh_popu.moving_meshes[index]
+        s_t_avg = self.mesh_popu.time_avg_meshes[index]
+        
+        dev_from_tmp_avg = np.array([ mse(s_t[j], s_t_avg) for j, _ in enumerate(s_t) ])
+        dev_from_sphere = np.array([ mse(s_t[j], ref_shape) for j, _ in enumerate(s_t) ])
+        
         z = self.mesh_popu.__dict__.get("coefficients", None)
 
         try:
@@ -61,15 +66,15 @@ class SyntheticMeshesDataset(Dataset):
             time_avg_mesh -= ref_shape
 
         dd = {
-            "s_t": moving_meshes,
-            "s_avg": time_avg_mesh,
+            "s_t": s_t,
+            "time_avg_s": s_t_avg,
             "d_content": dev_from_tmp_avg,
             "d_style": dev_from_sphere,
             "z_c": z_c,
             "z_s": z_s
         }
 
-        return dd
+        return EasyDict(dd)
     
 
     def __len__(self):

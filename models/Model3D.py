@@ -73,10 +73,14 @@ class Encoder3DMesh(nn.Module):
 
         self.matrices = {}
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
-        self.matrices["A_edge_index"] = list(reversed(A_edge_index))
-        self.matrices["A_norm"] = list(reversed(A_norm))
-        self.matrices["downsample"] = list(reversed(downsample_matrices))
+        #self.matrices["A_edge_index"] = list(reversed(A_edge_index))
+        #self.matrices["A_norm"] = list(reversed(A_norm))
+        #self.matrices["downsample"] = list(reversed(downsample_matrices))
 
+        self.matrices["A_edge_index"] = A_edge_index
+        self.matrices["A_norm"] = A_norm
+        self.matrices["downsample"] = downsample_matrices
+        
         self._n_features_before_z = self.matrices["downsample"][-1].shape[0] * self.filters_enc[-1]
         self._is_variational = is_variational
         self.latent_dim = latent_dim

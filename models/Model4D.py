@@ -61,6 +61,7 @@ class EncoderTemporalSequence(nn.Module):
         super(EncoderTemporalSequence, self).__init__()
         encoder_config = copy(encoder_config)
         encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
+        
         self.latent_dim = encoder_config["latent_dim"]
         self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
 
@@ -103,7 +104,7 @@ class EncoderTemporalSequence(nn.Module):
 
 
     def encoder(self, x):
-
+                
         self.n_timeframes = x.shape[1]
 
         # Iterate through time points
@@ -127,7 +128,7 @@ class EncoderTemporalSequence(nn.Module):
     def forward(self, x):
         return self.encoder(x)
 
-
+    
 ##########################################################################################
 
 DECODER_C_ARGS = copy(COMMON_ARGS)
@@ -196,6 +197,7 @@ class DecoderStyle(nn.Module):
         phased_z_s = self.phase_embedding(phased_z_s)
         s_out = [ self._process_one_timeframe(z_c, phased_z_s, t) for t in range(n_timeframes) ]
         s_out = torch.cat(s_out, dim=1)
+                
         return s_out
 
 
@@ -261,10 +263,19 @@ class AutoencoderTemporalSequence(nn.Module):
         super(AutoencoderTemporalSequence, self).__init__()
         self.encoder = EncoderTemporalSequence(enc_config, z_aggr_function=z_aggr_function, n_timeframes=n_timeframes)
         self.decoder = DecoderTemporalSequence(dec_c_config, dec_s_config, phase_embedding_method=phase_embedding_method)
-
-
+        self._is_variational = self.encoder.encoder_3d_mesh._is_variational
+                    
     def forward(self, s_t):
 
         z = self.encoder(s_t)
         avg_s, shat_t = self.decoder(z)
-        return avg_s, shat_t
+                        
+        return z, avg_s, shat_t
+
+    
+    def set_mode(self, mode: str):
+        '''
+        params:
+          mode: "training" or "testing"
+        '''
+        self._mode = mode

@@ -21,7 +21,7 @@ def mse(s1, s2=None):
         s2 = torch.zeros_like(s1)
     return ((s1-s2)**2).sum(-1).mean(-1)
 
-class CoMA(pl.LightningModule):
+class CoMA_Lightning(pl.LightningModule):
 
 
     def __init__(self, model: AutoencoderTemporalSequence, params: Namespace):
@@ -31,7 +31,7 @@ class CoMA(pl.LightningModule):
         :param params: a Namespace with additional parameters
         """
 
-        super(CoMA, self).__init__()
+        super(CoMA_Lightning, self).__init__()
         self.model = model
         self.params = params
 
@@ -59,15 +59,25 @@ class CoMA(pl.LightningModule):
         #This is the most elegant way I found so far to transfer the tensors to the right device 
         #(if this is run within __init__, I get self.device=="cpu" even when I use a GPU, so it doesn't work there)
 
-        for i, _ in enumerate(self.model.downsample_matrices):
-            self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
-            self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
-            self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
+        for i, _ in enumerate(self.model.encoder.matrices['downsample']):
+            self.model.encoder.matrices['downsample'][i] = self.model.encoder.matrices['downsample'][i].to(self.device)            
+            # self.model.encoder.matrices['adjacency_matrices'][i] = self.model.encoder.matrices['adjacency_matrices'][i].to(self.device)
+            self.model.decoder.matrices['upsample'][i] = self.model.decoder.matrices['upsample'][i].to(self.device)
 
-        for i, _ in enumerate(self.model.A_edge_index):
-            self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
-            self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
+        for i, _ in enumerate(self.model.encoder.matrices['A_edge_index']):
+            self.model.encoder.matrices['A_edge_index'][i] = self.model.encoder.matrices['A_edge_index'][i].to(self.device)
+            self.model.encoder.matrices['A_norm'][i] = self.model.encoder.matrices['A_norm'][i].to(self.device)
 
+        
+        #for i, _ in enumerate(self.model.downsample_matrices):
+        #    self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
+        #    self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
+        #    self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
+#
+        #for i, _ in enumerate(self.model.A_edge_index):
+        #    self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
+        #    self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
+#
                     
     def on_train_epoch_start(self):
         self.model.set_mode("training")
@@ -76,15 +86,21 @@ class CoMA(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         # data, ids = batch
-        s_t, time_avg_s, _, _ = batch
+        # embed()
+        # s_t, time_avg_s, _, _, _, _= batch
+        s_t, time_avg_s = batch["s_t"], batch["time_avg_s"]
         bottleneck, time_avg_shat, shat_t = self(s_t)
         recon_loss_c = self.rec_loss(time_avg_s, time_avg_shat)
         recon_loss_s = self.rec_loss(s_t, shat_t)
 
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
-        if self.model._is_variational:
-            self.mu_c, self.log_var_c, self.mu_s, self.log_var_s = bottleneck
+        if self.model._is_variational:            
+            bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])            
+            self.mu_c = bottleneck["mu_c"]
+            self.log_var_c = bottleneck["log_var_c"]
+            self.mu_s = bottleneck["mu_s"]
+            self.log_var_s = bottleneck["log_var_s"]            
             kld_loss_c = self.KL_div(self.mu_c, self.log_var_c)
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
         else:
@@ -144,8 +160,11 @@ class CoMA(pl.LightningModule):
         The common part is performed here.
         '''
 
-        s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
-
+        s_t = batch["s_t"]        
+        time_avg_s = batch["time_avg_s"]        
+        mse_mesh_to_tmp_mean = batch["d_content"]        
+        mse_mesh_to_pop_mean = batch["d_style"]
+        
         bottleneck, time_avg_s_hat, shat_t = self(s_t)
 
         # content
@@ -154,7 +173,14 @@ class CoMA(pl.LightningModule):
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
         if self.model._is_variational:
-            self.mu_c, self.log_var_c, self.mu_s, self.log_var_s = bottleneck
+            
+            bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])
+            
+            self.mu_c = bottleneck["mu_c"]
+            self.log_var_c = bottleneck["log_var_c"]
+            self.mu_s = bottleneck["mu_s"]
+            self.log_var_s = bottleneck["log_var_s"]
+            
             kld_loss_c = self.KL_div(self.mu_c, self.log_var_c)
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
             kld_loss = kld_loss_c + kld_loss_s
@@ -163,10 +189,19 @@ class CoMA(pl.LightningModule):
             loss = recon_loss
             kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(loss)
 
+        # N-dimensional
         rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
+        
+        # (N,T)-dimensional
         rec_ratio_to_pop_mean = mse(s_t, shat_t) / mse_mesh_to_pop_mean
         rec_ratio_to_time_mean = mse(s_t, shat_t) / mse_mesh_to_tmp_mean
 
+        rec_ratio_to_pop_mean_c = rec_ratio_to_pop_mean_c.mean()
+        rec_ratio_to_pop_mean = rec_ratio_to_pop_mean.mean()
+        rec_ratio_to_time_mean = rec_ratio_to_time_mean.mean()
+        
+        # embed()
+        
         return loss,\
                recon_loss, recon_loss_c, recon_loss_s,\
                kld_loss_c, kld_loss_s, kld_loss,\
@@ -192,7 +227,7 @@ class CoMA(pl.LightningModule):
           "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
           "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
-
+        
         self.log_dict(loss_dict)
         return loss_dict
 
