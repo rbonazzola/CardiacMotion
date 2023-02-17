@@ -38,7 +38,7 @@ def get_mlflow_dataset_params(config):
     d = config.dataset
 
     if d.data_type == "cardiac":
-        mlflow_dataset_params {
+        mlflow_dataset_params = {
           "dataset_type": "cardiac"
         }
 
