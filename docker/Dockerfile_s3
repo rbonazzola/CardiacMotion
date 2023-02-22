@@ -93,10 +93,67 @@ RUN git clone https://github.com/MPI-IS/mesh.git
 WORKDIR mesh
 RUN make all
 
+# I am including this in case it's needed, but at the moment I'm using the host's Nvidia drivers.
+# RUN apt-get update 
+# RUN sudo apt-get install && sudo apt-get install -y module-init-tools
+# RUN sudo apt-get install linux-headers-4.4.0-1122-aws
+# RUN wget https://us.download.nvidia.com/tesla/440.118.02/NVIDIA-Linux-x86_64-440.118.02.run
+# RUN sudo bash NVIDIA-Linux-x86_64-440.118.02.run -s
+
 RUN pip install nvgpu
+
+# Set up read-only SSH keys for personal GitHub repositories
+RUN mkdir /home/user/.ssh
+COPY --chown=user ssh_keys/* /home/user/.ssh/
+WORKDIR /app
+RUN touch /home/user/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /home/user/.ssh/known_hosts
+
+# Clone personal repositories
+RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/cardiac_motion; git clone git@github.com:rbonazzola/CardiacMotionRL.git'
+WORKDIR /app/CardiacMotionRL
+RUN git checkout development
+RUN ssh-agent bash -c 'ssh-add /home/user/.ssh/vtk_helpers; git submodule update --init --recursive'
+WORKDIR /app/CardiacMotionRL/utils/VTKHelpers
+RUN git checkout development
+WORKDIR /home/user
+
+# RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip
+# RUN ./aws/install -i /home/user/aws-cli -b /home/user/bin
+
+# RUN pip install s3cmd
+#COPY --chown=user aws/.s3cfg.gpg /home/user
+
+
+USER root
+## Install S3 Fuse
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+RUN unzip awscliv2.zip
+RUN ./aws/install
+
+# RUN conda install -c conda-forge awscli
+RUN rm -rf /usr/src/s3fs-fuse
+RUN git clone https://github.com/s3fs-fuse/s3fs-fuse/ /usr/src/s3fs-fuse
+WORKDIR /usr/src/s3fs-fuse 
+RUN ./autogen.sh && ./configure && make && make install
+RUN apt-get install fuse
+
+## Create folder
+USER user
+RUN mkdir $HOME/s3
+## Set the directory where you want to mount your s3 bucket
+ENV S3_MOUNT_DIRECTORY=$HOME/s3      
+## Replace with your s3 bucket name
+ENV S3_BUCKET_NAME=users-rbonazzola  
 
 RUN pip install -U numpy==1.23.5
 RUN pip install pyDeprecate==0.3.1
 RUN pip install setuptools==59.5.0
 
+## Entry Point
+ADD --chown=user start-script.sh $HOME/start-script.sh
+RUN chmod 755 $HOME/start-script.sh 
+COPY --chown=user aws/.passwd-s3fs.gpg $HOME
 WORKDIR $HOME
+CMD ["./start-script.sh"]
