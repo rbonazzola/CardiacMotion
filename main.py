@@ -28,7 +28,10 @@ def main(config, trainer_args):
     if config.mlflow:
 
         mlflow.pytorch.autolog()
-
+ 
+        if config.mlflow.tracking_uri is not None:
+            mlflow.set_tracking_uri(config.mlflow.tracking_uri)
+        
         try:
             exp_id = mlflow.create_experiment(config.mlflow.experiment_name, artifact_location=config.mlflow.artifact_location)
         except:
