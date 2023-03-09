@@ -5,10 +5,8 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.conv.cheb_conv import ChebConv
 from torch_geometric.utils import remove_self_loops
 
-from subprocess import check_output
 import shlex
 # import sys; sys.path.append(".")
-repo_root = check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
 
 from IPython import embed
 from utils.utils import normal

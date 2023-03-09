@@ -42,6 +42,45 @@ COMMON_ARGS = [
     "template",
 ]
 
+class AutoencoderTemporalSequence(nn.Module):
+
+    def __init__(self, enc_config, dec_c_config, dec_s_config, z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
+
+        super(AutoencoderTemporalSequence, self).__init__()
+        
+        self.encoder = EncoderTemporalSequence(
+            enc_config, 
+            z_aggr_function=z_aggr_function, 
+            n_timeframes=n_timeframes
+        )
+        
+        self.decoder = DecoderTemporalSequence(
+            dec_c_config, 
+            dec_s_config, 
+            phase_embedding_method=phase_embedding_method
+        )
+
+        self._is_variational = self.encoder.encoder_3d_mesh._is_variational
+
+        self.template_mesh = dec_c_config["template"]
+
+                    
+    def forward(self, s_t):
+
+        z = self.encoder(s_t)
+        avg_s, shat_t = self.decoder(z)
+                        
+        return z, avg_s, shat_t
+
+    
+    def set_mode(self, mode: str):
+        '''
+        params:
+          mode: "training" or "testing"
+        '''
+        self._mode = mode
+
+
 ##########################################################################################
 
 ENCODER_ARGS = copy(COMMON_ARGS)
@@ -52,7 +91,6 @@ ENCODER_ARGS.extend([
   "latent_dim_content",
   "latent_dim_style"
 ])
-
 
 class EncoderTemporalSequence(nn.Module):
 
@@ -211,8 +249,8 @@ class DecoderTemporalSequence(nn.Module):
         decoder_c_config = copy(decoder_c_config)
         decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
         decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
-        self.template_mesh = decoder_c_config["template"]
 
+        self.template_mesh = decoder_c_config["template"]
         self.latent_dim_content = decoder_c_config["latent_dim"]
         self.latent_dim_style = decoder_s_config["latent_dim_style"]
 
@@ -254,28 +292,3 @@ class DecoderTemporalSequence(nn.Module):
             })
 
         return bottleneck
-
-
-class AutoencoderTemporalSequence(nn.Module):
-
-    def __init__(self, enc_config, dec_c_config, dec_s_config, z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
-
-        super(AutoencoderTemporalSequence, self).__init__()
-        self.encoder = EncoderTemporalSequence(enc_config, z_aggr_function=z_aggr_function, n_timeframes=n_timeframes)
-        self.decoder = DecoderTemporalSequence(dec_c_config, dec_s_config, phase_embedding_method=phase_embedding_method)
-        self._is_variational = self.encoder.encoder_3d_mesh._is_variational
-                    
-    def forward(self, s_t):
-
-        z = self.encoder(s_t)
-        avg_s, shat_t = self.decoder(z)
-                        
-        return z, avg_s, shat_t
-
-    
-    def set_mode(self, mode: str):
-        '''
-        params:
-          mode: "training" or "testing"
-        '''
-        self._mode = mode

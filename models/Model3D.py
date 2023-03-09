@@ -27,6 +27,7 @@ class Autoencoder3DMesh(nn.Module):
         x_hat = self.decoder(mu)
         return x_hat
 
+    
 ################# ENCODER #################
 
 ENCODER_ARGS = [
@@ -73,10 +74,6 @@ class Encoder3DMesh(nn.Module):
 
         self.matrices = {}
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
-        #self.matrices["A_edge_index"] = list(reversed(A_edge_index))
-        #self.matrices["A_norm"] = list(reversed(A_norm))
-        #self.matrices["downsample"] = list(reversed(downsample_matrices))
-
         self.matrices["A_edge_index"] = A_edge_index
         self.matrices["A_norm"] = A_norm
         self.matrices["downsample"] = downsample_matrices
@@ -164,7 +161,7 @@ class Encoder3DMesh(nn.Module):
         return list(adj_edge_index), list(adj_norm)
 
     
-    def concatenate_graph_features(self, x):
+    def concatenate_graph_features(self, x):        
         x = x.reshape(x.shape[0], self._n_features_before_z)
         return x
 

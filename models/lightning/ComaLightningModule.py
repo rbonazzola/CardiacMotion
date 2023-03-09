@@ -305,7 +305,11 @@ class CoMA_Lightning(pl.LightningModule):
         
     def predict_step(self, batch, batch_idx):
 
-        s_t, time_avg_s, mse_mesh_to_tmp_mean, mse_mesh_to_pop_mean = batch
+        s_t = batch["s_t"]        
+        time_avg_s = batch["time_avg_s"]        
+        mse_mesh_to_tmp_mean = batch["d_content"]        
+        mse_mesh_to_pop_mean = batch["d_style"]
+        
         bottleneck, time_avg_s_hat, s_hat_t = self(s_t)
 
         ### IMAGES OF TEMPORAL AVERAGE

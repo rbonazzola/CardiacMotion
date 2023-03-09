@@ -258,6 +258,7 @@ class SyntheticMeshPopulation(object):
         None, only produces the png file. 
         '''
 
+        pv.start_xvfb()
         pv.set_plot_theme("document")
         plotter = pv.Plotter(off_screen=True, notebook=False)
         connectivity = np.c_[np.ones(faces.shape[0]) * 3, faces].astype(int)
@@ -274,7 +275,7 @@ class SyntheticMeshPopulation(object):
         plotter.screenshot(filename if filename.endswith("png") else filename + ".png")
 
 
-    def _generate_gif(mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
+    def _generate_gif(self, mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
         
         '''
         Produces a gif file representing the motion of the input mesh.
@@ -289,12 +290,14 @@ class SyntheticMeshPopulation(object):
           None, only produces the gif file.
         '''
 
+        # embed()
         connectivity = np.c_[np.ones(faces.shape[0]) * 3, faces].astype(int)
-
+                
         pv.set_plot_theme("document")
         os.makedirs(os.path.dirname("./"+filename) , exist_ok=True)
         
         # plotter = pv.Plotter(shape=(1, len(camera_positions)), notebook=False, off_screen=True)
+        pv.start_xvfb()
         plotter = pv.Plotter(notebook=False, off_screen=True)
             
         # Open a gif

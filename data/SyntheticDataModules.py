@@ -11,6 +11,8 @@ from easydict import EasyDict
 
 from IPython import embed
 
+N_PRED = 1
+
 NUM_WORKERS = 4
 
 def mse(s1, s2):
@@ -23,15 +25,43 @@ class SyntheticMeshesDataset(Dataset):
     '''
 
     def  __init__(self, data_params, preprocessing_params):
+        
         '''
+        Arguments:
+          params (dict): parameters used by SyntheticMeshPopulation to build the population of meshes                    
+          center_around_mean (boolean): whether to subtract the coordinates of the reference shape at each node
+          
         params:
-          params (dict): parameters used by SyntheticMeshPopulation to build the population of meshes
-          center_around_mean (boolean): whether to subtract the coordinates of the reference shape at each node  
+        - N, 
+        - T, 
+        - l_max, 
+        - freq_max,
+        - amplitude_static_max,
+        - amplitude_dynamic_max, 
+        - mesh_resolution, 
+        - random_seed, 
+        - verbose=False, 
+        - cache=True, 
+        - from_cache_if_exists=True, 
+        - odir=None, 
+        - ofile=None
+        
+        Example:
+        
+        params = { 
+          "N": 100, "T": 20, "mesh_resolution": 10,
+          "l_max": 2, "freq_max": 2, 
+          "amplitude_static_max": 0.3, "amplitude_dynamic_max": 0.1, 
+          "random_seed": 142
+        }
+        
+        mesh_dataset = SyntheticMeshesDataset(params)
         '''
 
         self.mesh_popu = SyntheticMeshPopulation(**data_params)                
         self.preprocessing_params = preprocessing_params
 
+        
     def __getitem__(self, index):
         
         ''' 
@@ -44,8 +74,7 @@ class SyntheticMeshesDataset(Dataset):
 
         ref_shape = np.array(self.mesh_popu.template.vertices)
         
-        # s_t: moving_meshes
-        
+        # s_t: moving_meshes    
         s_t = self.mesh_popu.moving_meshes[index]
         s_t_avg = self.mesh_popu.time_avg_meshes[index]
         
@@ -61,8 +90,9 @@ class SyntheticMeshesDataset(Dataset):
             pass
 
         if self.preprocessing_params.center_around_mean:
-            for j, _ in enumerate(moving_meshes): 
-                moving_meshes[j] -= ref_shape
+            for j, _ in enumerate(self.mesh_popu.moving_meshes): 
+                self.mesh_popu.moving_meshes -= ref_shape
+                moving_meshes[j] -= ref_shape 
             time_avg_mesh -= ref_shape
 
         dd = {
@@ -74,9 +104,11 @@ class SyntheticMeshesDataset(Dataset):
             "z_s": z_s
         }
 
-        return EasyDict(dd)
+        # so that it can be also queried as a namespace
+        dd = EasyDict(dd)
+        
+        return dd
     
-
     def __len__(self):
         return len(self.mesh_popu.moving_meshes)
         
@@ -88,13 +120,12 @@ class SyntheticMeshesDataset(Dataset):
 class SyntheticMeshesDM(pl.LightningDataModule):
     
     '''
-    PyTorch datamodule wrapping the CardiacMeshPopulation class
+    PyTorch Lightning datamodule wrapping the CardiacMeshPopulation class
     '''
     
     def __init__(self,
-        data_params,
-        preprocessing_params,
-        batch_size=32,
+        dataset: Dataset,
+        batch_size: int=32,
         split_lengths: Union[None, List[int]]=None,
         split_fractions: Union[None, List[float]]=None,
 
@@ -102,7 +133,8 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
         '''
         params:
-            pkl_file: path to pickle file containing a dictionary with keys "population_meshes" and "coefficients"            
+            data_params: 
+            preprocessing_params:
             batch_size: batch size for training.
             split_lengths: number of samples for training, validation and testing (in that order). 
                            The last (# sample in testing) is not used and is computed as the difference.
@@ -112,11 +144,10 @@ class SyntheticMeshesDM(pl.LightningDataModule):
         
         super().__init__()                
         
+        self.dataset = dataset
         self.batch_size = batch_size        
         self.split_lengths = split_lengths
-        self.data_params = data_params
-        self.preprocessing_params = preprocessing_params
-
+        
         if self.split_lengths is None:
             if split_fractions is not None:
                 self.split_fractions = split_fractions 
@@ -125,16 +156,14 @@ class SyntheticMeshesDM(pl.LightningDataModule):
 
 
     def setup(self, stage: Optional[str] = None):
-
-        popu = SyntheticMeshesDataset(self.data_params, self.preprocessing_params)
-
+        
         if self.split_lengths is None:
-            train_len = int(self.split_fractions[0] * len(popu))
-            val_len = int(self.split_fractions[1] * len(popu))            
-            test_len = len(popu) - train_len - val_len
+            train_len = int(self.split_fractions[0] * len(self.dataset))
+            val_len = int(self.split_fractions[1] * len(self.dataset))            
+            test_len = len(self.dataset) - train_len - val_len
             self.split_lengths = [train_len, val_len, test_len]
 
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(popu, self.split_lengths)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(self.dataset, self.split_lengths)
 
 
     def train_dataloader(self):
@@ -147,6 +176,6 @@ class SyntheticMeshesDM(pl.LightningDataModule):
         return DataLoader(self.test_dataset, batch_size=1, num_workers=NUM_WORKERS)
 
     def predict_dataloader(self):
-        predict_len = 16 if len(self.test_dataset) >= 16 else len(self.test_dataset)
+        predict_len = N_PRED if len(self.test_dataset) >= N_PRED else len(self.test_dataset)
         predict_dataset = torch.utils.data.Subset(self.test_dataset, range(predict_len))
-        return DataLoader(predict_dataset, batch_size=16, num_workers=NUM_WORKERS)
+        return DataLoader(predict_dataset, batch_size=1, num_workers=NUM_WORKERS)

@@ -3,9 +3,7 @@ import os
 import sys; sys.path.append("..")
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
-from pytorch_lightning.callbacks import RichModelSummary
 from data.DataModules import CardiacMeshPopulationDM
 from data.SyntheticDataModules import SyntheticMeshesDM
 from utils import mesh_operations
@@ -14,6 +12,8 @@ from utils.mesh_operations import Mesh
 import pickle as pkl
 
 from easydict import EasyDict
+from typing import Mapping, Sequence
+
 
 def scipy_to_torch_sparse(scp_matrix):
 
@@ -28,31 +28,35 @@ def scipy_to_torch_sparse(scp_matrix):
     return sparse_tensor
 
 
-def get_datamodule(config, perform_setup=True):
+def get_datamodule(config: Mapping, perform_setup: bool=True):
 
     '''
-
+      Arguments:
+        - config:
+        - perform_setup: whether to run DataModule.setup()
     '''
 
     # TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS
     if config.dataset.data_type.startswith("cardiac"):
         dm = CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.batch_size)
+        
     elif config.dataset.data_type.startswith("synthetic"):
-        dm = SyntheticMeshesDM(
-            batch_size=config.batch_size,
+        dataset = SyntheticMeshesDataset(
             data_params=config.dataset.parameters.__dict__,
             preprocessing_params=config.dataset.preprocessing
         )
+        data_module = SyntheticMeshesDM(dataset, batch_size=config.batch_size)
 
     if perform_setup:
-        dm.setup()
+        data_module.setup()
 
-    return dm
+    return data_module
 
 
-def get_coma_matrices(config, dm, cache=True, from_cached=True):
+def get_coma_matrices(downsample_factors: Sequence[int], dm: pl.LightningDataModule, cache:bool=True, from_cached:bool=True):
+    
     '''
-    :param config: configuration Namespace, with a list called "network_architecture.pooling.parameters.downsampling_factors" as attribute.
+    :param downsample_factors: list of downsampling factors, e.g. [2, 2, 2, 2]
     :param dm: a PyTorch Lightning datamodule, with attributes train_dataset.dataset.mesh_popu and train_dataset.dataset.mesh_popu.template
     :param cache: if True, will cache the matrices in a pkl file, unless this file already exists.
     :param from_cached: if True, will try to fetch the matrices from a previously cached pkl file.
@@ -61,8 +65,10 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
     '''
 
     mesh_popu = dm.train_dataset.dataset.mesh_popu
+    
     matrices_hash = hash(
-        (mesh_popu._object_hash, tuple(config.network_architecture.pooling.parameters.downsampling_factors))) % 1000000
+        (mesh_popu._object_hash, tuple(downsample_factors))) % 1000000
+    
     cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
 
     if from_cached and os.path.exists(cached_file):
@@ -70,7 +76,7 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
     else:
         template_mesh = Mesh(mesh_popu.template.vertices, mesh_popu.template.faces)
         M, A, D, U = mesh_operations.generate_transform_matrices(
-            template_mesh, config.network_architecture.pooling.parameters.downsampling_factors,
+            template_mesh, downsample_factors,
         )
         n_nodes = [len(M[i].v) for i in range(len(M))]
         A_t, D_t, U_t = ([scipy_to_torch_sparse(x).float() for x in X] for X in (A, D, U))
@@ -88,7 +94,13 @@ def get_coma_matrices(config, dm, cache=True, from_cached=True):
     }
 
 
-def get_coma_args(config, dm):
+def get_coma_args(config: Mapping, dm: pl.LightningDataModule):
+    
+    '''
+      Arguments:
+        - config:
+        - dm:    
+    '''
 
     net = config.network_architecture
 
@@ -109,13 +121,21 @@ def get_coma_args(config, dm):
         "z_aggr_function": net.z_aggr_function
     }
 
-    matrices = get_coma_matrices(config, dm, from_cached=False)
+    downsample_factors = config.network_architecture.pooling.parameters.downsampling_factors
+    
+    matrices = get_coma_matrices(downsample_factors, dm, from_cached=False)
     coma_args.update(matrices)
 
     return EasyDict(coma_args)
 
 
-def get_lightning_module(config, dm):
+def get_lightning_module(config: Mapping, dm: pl.LightningDataModule):
+    
+    '''
+      Arguments:
+        - config:
+        - dm:    
+    '''
 
     # Initialize PyTorch model
     coma_args = get_coma_args(config, dm)
@@ -174,15 +194,45 @@ def get_lightning_module(config, dm):
     return model
 
 
-def get_lightning_trainer(trainer_args):
+##########################################################################################
 
+# PyTorch Lightning Callbacks
+
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import RichProgressBar
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
+from pytorch_lightning.callbacks import RichModelSummary
+
+early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=20)
+
+model_checkpoint = ModelCheckpoint(monitor='val_loss', save_top_k=1)
+
+rich_model_summary = RichModelSummary(max_depth=-1)
+
+progress_bar = RichProgressBar(
+  theme=RichProgressBarTheme(
+    description="green_yellow",
+    progress_bar="green1",
+    progress_bar_finished="green1",
+    progress_bar_pulse="#6206E0",
+    batch_progress="green_yellow",
+    time="grey82",
+    processing_speed="grey82",
+    metrics="grey82",
+  )
+)
+
+def get_lightning_trainer(trainer_args: Mapping):
+
+    '''
+      trainer_args:
+    '''
+    
     # trainer
     trainer_kwargs = {
-        "callbacks": [
-            EarlyStopping(monitor="val_loss", mode="min", patience=3),
-            RichModelSummary(max_depth=-1)
-        ],
-        "gpus": [trainer_args.gpus],
+        "callbacks": [ early_stopping, model_checkpoint, rich_model_summary, progress_bar ],
+        "gpus": trainer_args.gpus,
         "auto_select_gpus": trainer_args.auto_select_gpus,
         "min_epochs": trainer_args.min_epochs, "max_epochs": trainer_args.max_epochs,
         "auto_scale_batch_size": trainer_args.auto_scale_batch_size,
@@ -200,9 +250,15 @@ def get_lightning_trainer(trainer_args):
     return trainer
 
 
-def get_dm_model_trainer(config, trainer_args):
+def get_dm_model_trainer(config: Mapping, trainer_args: Mapping):
+    
     '''
-    Returns a tuple of (PytorchLightning datamodule, PytorchLightning model, PytorchLightning trainer)
+      Arguments:
+        - config:
+        - dm:    
+      
+      Return:
+        a tuple of (PytorchLightning datamodule, PytorchLightning model, PytorchLightning trainer)
     '''
 
     # LOAD DATA
