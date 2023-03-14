@@ -147,10 +147,12 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     faces = mesh.f.copy()
     nverts_total_ = nverts_total
     while nverts_total > n_verts_desired:
-        if nverts_total % 100 == 0 and nverts_total_ != nverts_total:            
-            nverts_total_ = nverts_total
-            print(f"{time.time() - start}: {nverts_total}")
-            start = time.time()
+
+        #if nverts_total % 100 == 0 and nverts_total_ != nverts_total:            
+        #    nverts_total_ = nverts_total
+        #    print(f"{time.time() - start}: {nverts_total}")
+        #    start = time.time()
+
         e = heapq.heappop(queue)
         r = e[1][0]
         c = e[1][1]
