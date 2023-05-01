@@ -5,7 +5,7 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 import pytorch_lightning as pl
 import pickle as pkl
-from synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
+from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 from PIL import Image
 from easydict import EasyDict
 
