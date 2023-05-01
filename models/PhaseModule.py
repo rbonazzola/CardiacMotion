@@ -48,7 +48,7 @@ class PhaseTensor(nn.Module):
 
             for t in range(n_timeframes):
                 phase = 2 * np.pi * t / n_timeframes * torch.ones_like(x[:, t, ...])
-                phase = torch.FloatTensor(phase)
+                # phase = torch.FloatTensor(phase)
                 phase = phase.type_as(x)  # to(x.device)
 
                 # torch.polar(x, phase) returns x * exp(i * phase), i.e. x as a phasor
