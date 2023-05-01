@@ -14,59 +14,86 @@ import os
 import argparse
 import pprint
 
+# from typing import Namespace
+
 from IPython import embed
 
+
+def mlflow_startup(mlflow_config):
+    
+    '''
+      Starts MLflow run, using
+      
+      mlflow_config: Namespace including run_id, experiment_name, run_name, artifact_location            
+    
+    '''
+    
+    mlflow.pytorch.autolog(log_models=True)
+ 
+    if mlflow_config.tracking_uri is not None:
+        mlflow.set_tracking_uri(mlflow_config.tracking_uri)
+    
+    try:
+        exp_id = mlflow.create_experiment(mlflow_config.experiment_name, artifact_location=mlflow_config.artifact_location)
+    except:
+      # If the experiment already exists, we can just retrieve its ID
+        experiment = mlflow.get_experiment_by_name(mlflow_config.experiment_name)
+        exp_id = experiment.experiment
+    run_info = {
+        "run_id": trainer.logger.run_id,
+        "experiment_id": exp_id,
+        "run_name": mlflow_config.run_name,
+        #"tags": config.additional_mlflow_tags
+    }
+    
+    mlflow.start_run(**run_info)
+    
+        
+def mlflow_log_additional_params(config):
+    
+    '''
+    Log additional parameters, extracted from config
+    '''
+        
+    mlflow_params = get_mlflow_parameters(config)
+    mlflow_dataset_params = get_mlflow_dataset_params(config)
+    mlflow_params.update(mlflow_dataset_params)
+    mlflow.log_params(mlflow_params)    
+        
+        
+def log_computational_graph(model, x):
+    
+    from torchviz import make_dot
+    yhat = model(x)
+    make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
+    mlflow.log_figure("comp_graph_network.png")
+        
+        
 ###
-def main(config, trainer_args):
+def main(config, trainer_args, mlflow_config=None):
 
     '''
-
+      config (Namespace):       
+      trainer_args (Namespace):
+      mlflow_config (Namespace):
+      
+      Example:
+      
+      
     '''
 
     dm, model, trainer = get_dm_model_trainer(config, trainer_args)
-
-    if config.mlflow:
-
-        mlflow.pytorch.autolog()
- 
-        if config.mlflow.tracking_uri is not None:
-            mlflow.set_tracking_uri(config.mlflow.tracking_uri)
         
-        try:
-            exp_id = mlflow.create_experiment(config.mlflow.experiment_name, artifact_location=config.mlflow.artifact_location)
-        except:
-          # If the experiment already exists, we can just retrieve its ID
-            experiment = mlflow.get_experiment_by_name(config.mlflow.experiment_name)
-            exp_id = experiment.experiment_id
-
-        run_info = {
-            "run_id": trainer.logger.run_id,
-            "experiment_id": exp_id,
-            "run_name": config.mlflow.run_name,
-            #"tags": config.additional_mlflow_tags
-        }
-
-        mlflow.start_run(**run_info)
-            
-        if config.log_computational_graph:
-            from torchviz import make_dot
-            yhat = model(next(iter(dm.train_dataloader()))[0])
-            make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
-            mlflow.log_figure("comp_graph_network.png")
-
-        mlflow_params = get_mlflow_parameters(config)
-        mlflow_dataset_params = get_mlflow_dataset_params(config)
-        mlflow_params.update(mlflow_dataset_params)
-
-        mlflow.log_params(mlflow_params)
-        # mlflow.log_params(config.additional_mlflow_params)
-
+    if mlflow_config:
+        mlflow_config.run_id = trainer.logger.run_id
+        mlflow_startup(mlflow_config)             
+        mlflow_log_additional_params(config)
+                                       
     trainer.fit(model, datamodule=dm)
-    trainer.test(datamodule=dm) # Generates metrics for the full test dataset
+    trainer.test(datamodule=dm, ckpt_path='best') # Generates metrics for the full test dataset
     trainer.predict(ckpt_path='best', datamodule=dm) # Generates figures for a few samples
 
-    mlflow.end_run()
-    # print_auto_logged_info(mlflow.get_run(run_id=run.info.run_id))
+    mlflow.end_run()    
 
 
 if __name__ == "__main__":
@@ -138,10 +165,10 @@ if __name__ == "__main__":
         if config.mlflow:
             config.mlflow.experiment_name = "rbonazzola - encoder only"
 
-    if config.only_decoder or config.only_encoder:
-        d = config.dataset
-        config.network_architecture.latent_dim_c = (d.parameters.l_max + 1) ** 2
-        config.network_architecture.latent_dim_s = ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max
+    #if config.only_decoder or config.only_encoder:
+    d = config.dataset
+    config.network_architecture.latent_dim_c = (d.parameters.l_max + 1) ** 2
+    config.network_architecture.latent_dim_s = ((d.parameters.l_max + 1) ** 2) * d.parameters.freq_max
     
     if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)
@@ -150,4 +177,4 @@ if __name__ == "__main__":
             exit()
 
 
-    main(config, trainer_args)
+    main(config, trainer_args, config.mlflow)
