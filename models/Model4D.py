@@ -44,25 +44,35 @@ COMMON_ARGS = [
 
 class AutoencoderTemporalSequence(nn.Module):
 
-    def __init__(self, enc_config, dec_c_config, dec_s_config, z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
+    def __init__(self, 
+                 encoder=None, decoder=None, 
+                 enc_config=None, dec_c_config=None, dec_s_config=None, 
+                 z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
 
         super(AutoencoderTemporalSequence, self).__init__()
         
-        self.encoder = EncoderTemporalSequence(
-            enc_config, 
-            z_aggr_function=z_aggr_function, 
-            n_timeframes=n_timeframes
-        )
+        if encoder is not None:
+            self.encoder = encoder            
+        else:
+            self.encoder = EncoderTemporalSequence(
+                enc_config, 
+                z_aggr_function=z_aggr_function, 
+                n_timeframes=n_timeframes
+            )
+            
         
-        self.decoder = DecoderTemporalSequence(
-            dec_c_config, 
-            dec_s_config, 
-            phase_embedding_method=phase_embedding_method
-        )
+        if decoder is not None:
+            self.decoder = decoder
+        else:            
+            self.decoder = DecoderTemporalSequence(
+                dec_c_config, 
+                dec_s_config, 
+                phase_embedding_method=phase_embedding_method
+            )
+            
+        # self._is_variational = self.encoder.encoder_3d_mesh._is_variational
 
-        self._is_variational = self.encoder.encoder_3d_mesh._is_variational
-
-        self.template_mesh = dec_c_config["template"]
+        # self.template_mesh = dec_c_config["template"]
 
                     
     def forward(self, s_t):
@@ -88,49 +98,51 @@ ENCODER_ARGS.extend([
   "phase_input",
   "downsample_matrices",
   "num_conv_filters_enc",
-  "latent_dim_content",
-  "latent_dim_style"
+  "latent_dim_c",
+  "latent_dim_s"
+  #"latent_dim_content",
+  #"latent_dim_style"
 ])
+
+def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], str]):
+
+    '''
+       Make attributes from an object's child visible from the (parent) object's namespace
+    '''
+
+    child = getattr(self, child)
+
+    if isinstance(attributes, str):
+        attributes = [attributes]
+
+    for attribute in attributes:
+        setattr(self, attribute, getattr(child, attribute))
+    return self
+
+
+##########################################################################################
 
 class EncoderTemporalSequence(nn.Module):
 
-    def __init__(self, encoder_config, z_aggr_function, phase_embedding=None, n_timeframes=None):
+    def __init__(self, encoder3d, z_aggr_function, phase_embedding=None, n_timeframes=None):
 
-        super(EncoderTemporalSequence, self).__init__()
-        encoder_config = copy(encoder_config)
-        encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
+        '''
         
-        self.latent_dim = encoder_config["latent_dim"]
-        self.encoder_3d_mesh = Encoder3DMesh(**encoder_config)
+        '''
+        
+        super(EncoderTemporalSequence, self).__init__()
+        # encoder_config = copy(encoder_config)
+        # encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
+        # 
+        # self.latent_dim = encoder_config["latent_dim"]
+        # Encoder3DMesh(**encoder_config)
+        self.encoder_3d_mesh = encoder3d
 
         self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["matrices"])
 
-        self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
+        # self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
+        self.z_aggr_function = z_aggr_function
         self.phase_embedding = phase_embedding
-
-
-    def _get_z_aggr_function(self, z_aggr_function, n_timeframes=None):
-
-        if z_aggr_function == "mean":
-            if phase_embedding is None:
-                exit("The temporal aggregation cannot be the mean if phase information is not embedded into the input meshes.")
-            z_aggr_function = Mean_Aggregator()
-
-        elif z_aggr_function.lower() in {"fcn", "fully_connected"}:
-            self.n_timeframes = n_timeframes
-            z_aggr_function = FCN_Aggregator(
-                features_in=n_timeframes * self.latent_dim,
-                features_out=(self.latent_dim)
-            )
-
-        elif z_aggr_function.lower() in {"dft", "discrete_fourier_transform"}:
-            self.n_timeframes = n_timeframes
-            z_aggr_function = DFT_Aggregator(
-                features_in=(n_timeframes // 2 + 1) * 2 * (self.latent_dim),
-                features_out=(self.latent_dim)
-            )
-
-        return z_aggr_function
 
 
     def set_mode(self, mode: str):
@@ -145,26 +157,28 @@ class EncoderTemporalSequence(nn.Module):
                 
         self.n_timeframes = x.shape[1]
 
-        # Iterate through time points
-        bottleneck_t = [ self.encoder_3d_mesh(x[:, i, :]) for i in range(self.n_timeframes) ]
-        mu = [ bottleneck["mu"] for bottleneck in bottleneck_t ]
+        # Iterate through time points                        
+        #bottleneck_t = [ self.encoder_3d_mesh(x[:, i, :]) for i in range(self.n_timeframes) ]
+        #mu = [ bottleneck["mu"] for bottleneck in bottleneck_t ]
 
         # If one element (and therefore all elements) are None, replace the whole thing with None
-        log_var = [ bottleneck["log_var"] for bottleneck in bottleneck_t ] if bottleneck_t[0]["log_var"] is not None else None
+        #log_var = [ bottleneck["log_var"] for bottleneck in bottleneck_t ] if bottleneck_t[0]["log_var"] is not None else None
 
-        mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
-        mu = self.z_aggr_function(mu)
+        #mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
+        h = self.encoder_3d_mesh.forward_conv_stack(x, preserve_graph_structure=False)
+        z = self.z_aggr_function(h)
 
-        if log_var is not None:
-            log_var_t = torch.cat(log_var).reshape(-1, self.n_timeframes, self.latent_dim)
-            log_var = self.z_aggr_function(log_var_t)
+        # if log_var is not None:
+        #     log_var_t = torch.cat(log_var).reshape(-1, self.n_timeframes, self.latent_dim)
+        #     log_var = self.z_aggr_function(log_var_t)
 
-        bottleneck = {"mu": mu, "log_var": log_var}
+        bottleneck = {"mu": z, "log_var": None}
         return bottleneck
 
 
     def forward(self, x):
         return self.encoder(x)
+
 
     
 ##########################################################################################
@@ -185,9 +199,31 @@ DECODER_S_ARGS.extend([
     "n_timeframes"
 ])
 
+class DecoderContent(Decoder3DMesh):
+    
+    def __init__(self, decoder_c_config):
+        
+        decoder_c_config = copy(decoder_c_config)
+        decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
+        decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
+        
+        super(DecoderContent, self).__init__(**decoder_c_config)
+
+
+from typing import Literal
+
+PHASE_EMBEDDINGS = Literal[
+    "inverse_dft", "dft", 
+    "concatenation", "concat", 
+    "exponential_v1", "exp_v1", "exp", 
+    "exponential_v2", "exp_v2"
+]                    
+        
 class DecoderStyle(nn.Module):
 
-    def __init__(self, decoder_config: dict, phase_embedding_method: str, n_timeframes: Union[int, None]=None):
+    def __init__(self, decoder_config: dict, 
+                 phase_embedding_method: PHASE_EMBEDDINGS = "exp", 
+                 n_timeframes: Union[int, None]=None):
 
         super(DecoderStyle, self).__init__()
 
@@ -237,28 +273,26 @@ class DecoderStyle(nn.Module):
         s_out = torch.cat(s_out, dim=1)
                 
         return s_out
-
-
-
+      
+            
 class DecoderTemporalSequence(nn.Module):
 
-    def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method, n_timeframes=None):
+    # def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method: PHASE_EMBEDDINGS = "exp", n_timeframes=None):
+    def __init__(self, decoder_content, decoder_style):
 
         super(DecoderTemporalSequence, self).__init__()
 
-        decoder_c_config = copy(decoder_c_config)
-        decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
-        decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
-
-        self.template_mesh = decoder_c_config["template"]
-        self.latent_dim_content = decoder_c_config["latent_dim"]
-        self.latent_dim_style = decoder_s_config["latent_dim_style"]
-
-        self.decoder_content = Decoder3DMesh(**decoder_c_config)
-        self.decoder_style = DecoderStyle(decoder_s_config, phase_embedding_method, n_timeframes)
-
+        # self.template_mesh = decoder_c_config["template"]
+        
+        self.latent_dim_content = decoder_content.latent_dim
+        
+        #TOFIX: 
+        self.latent_dim_style = (decoder_style.decoder_3d.latent_dim - self.latent_dim_content) / 2
+        
+        self.decoder_content = decoder_content
+        self.decoder_style = decoder_style
         self = _steal_attributes_from_child(self, child="decoder_content", attributes=["matrices"])
-
+    
 
     def set_mode(self, mode: str):
         '''
