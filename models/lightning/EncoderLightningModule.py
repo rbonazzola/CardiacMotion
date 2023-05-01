@@ -10,7 +10,7 @@ from IPython import embed # uncomment for debugging
 # from models.Model4D import  EncoderTemporalSequence
 # from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
-from image_helpers import *
+# from image_helpers import *
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -22,6 +22,11 @@ def mse(s1, s2=None):
         s2 = torch.zeros_like(s1)
     return ((s1-s2)**2).sum(-1).mean(-1)
 
+LOG_OPTIONS = {
+    "on_epoch": True,
+    "prog_bar": True,
+    "logger": True
+}
 
 class TemporalEncoderLightning(pl.LightningModule):
 
@@ -98,23 +103,19 @@ class TemporalEncoderLightning(pl.LightningModule):
         self.log_dict({
             "training_recon_loss": avg_recon_loss.detach(),
             "training_loss": avg_loss.detach()
-          },
-          on_epoch=True,
-          prog_bar=True,
-          logger=True,
+          }, **LOG_OPTIONS          
         )
 
     def on_validation_epoch_start(self):
         self.model.set_mode("testing")
 
 
-    def _shared_eval_step(self, batch, batch_idx):
+    def _shared_eval_step(self, batch, batch_idx, prefix: str):
 
         '''
         The validation and testing steps are similar, only the names of the logged quantities differ.
         The common part is performed here.
         '''
-
 
         s_t, z_c, z_s = batch["s_t"], batch["z_c"], batch["z_s"]
 
@@ -128,19 +129,25 @@ class TemporalEncoderLightning(pl.LightningModule):
         loss = recon_loss
 
         # TODO: compute normalized metrics
-        # rec_ratio_to_pop_mean_c = mse(time_avg_s, time_avg_s_hat) / mse(time_avg_s)
-        # rec_ratio_to_pop_mean = mse(s_t, shat_t) / mse_mesh_to_pop_mean
-        # rec_ratio_to_time_mean = mse(s_t, shat_t) / mse_mesh_to_tmp_mean
-
-        return loss,\
-               recon_loss
+        z_sqerr = (z - z_hat)**2
+        z_sqnorm = z**2
+        
+        loss_dict = { 
+            f"{prefix}recon_loss": recon_loss, 
+            f"{prefix}loss": loss, 
+            f"{prefix}z_sqerr": z_sqerr, 
+            f"{prefix}z_sqnorm": z_sqnorm 
+        }
+        
+        self.log_dict(loss_dict)
+        
+        return loss_dict
 
 
     def validation_step(self, batch, batch_idx):
 
-        loss, recon_loss = self._shared_eval_step(batch, batch_idx)
-        loss_dict = { "val_recon_loss": recon_loss, "val_loss": loss }
-        self.log_dict(loss_dict)
+        loss_dict = self._shared_eval_step(batch, batch_idx, prefix="val_")
+                
         return loss_dict
 
 
@@ -149,32 +156,42 @@ class TemporalEncoderLightning(pl.LightningModule):
         #TODO: iterate over keys of the elements of `outputs`
 
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
-        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
+        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()        
+        
+        avg_z_sqerr = torch.stack([x["val_z_sqerr"] for x in outputs]).mean()
+        avg_z_sqnorm = torch.stack([x["val_z_sqnorm"] for x in outputs]).mean()                
+        avg_norm_z_err = avg_z_sqerr / avg_z_sqnorm
 
-        self.log_dict(
-          {"val_recon_loss": avg_recon_loss.detach(), "val_loss": avg_loss.detach()},
-          on_epoch=True,
-          prog_bar=True,
-          logger=True
+        self.log_dict({
+            "val_recon_loss": avg_recon_loss.detach(), 
+            "val_loss": avg_loss.detach(),
+            "val_z_norm_err": avg_norm_z_err.detach()            
+          }, 
+          **LOG_OPTIONS          
         )
 
 
     def test_step(self, batch, batch_idx):
 
-        loss, recon_loss = self._shared_eval_step(batch, batch_idx)
-        loss_dict = { "test_recon_loss": recon_loss, "test_loss": loss }
-        self.log_dict(loss_dict)
+        loss_dict = self._shared_eval_step(batch, batch_idx, prefix="test_")        
         return loss_dict
 
 
+    #TOFIX: DUPLICATED FROM ABOVE
     def test_epoch_end(self, outputs):
 
         avg_recon_loss = torch.stack([x["test_recon_loss"] for x in outputs]).mean()
         avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
+        
+        avg_z_sqerr = torch.stack([x["test_z_sqerr"] for x in outputs]).mean()
+        avg_z_sqnorm = torch.stack([x["test_z_sqnorm"] for x in outputs]).mean()                
+        avg_norm_z_err = avg_z_sqerr / avg_z_sqnorm
+
 
         loss_dict = {
             "test_recon_loss": avg_recon_loss.detach(),
             "test_loss": avg_loss.detach(),
+            "test_z_norm_err": avg_norm_z_err.detach()
         }
 
         self.log_dict(loss_dict)
