@@ -32,7 +32,8 @@ def is_yaml_file(x):
 def get_repo_rootdir():
     import shlex
     from subprocess import check_output
-    repo_rootdir = "/home/user/CardiacMotion" #check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
+    # repo_rootdir = f"{os.environ['HOME']}/Rodrigo_repos/CardiacMotion" #check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
+    repo_rootdir = f"{os.environ['HOME']}/01_repos/CardiacMotion" #check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
     return repo_rootdir
 
 
