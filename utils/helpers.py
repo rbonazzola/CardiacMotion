@@ -5,14 +5,14 @@ import sys; sys.path.append("..")
 import pytorch_lightning as pl
 
 from data.DataModules import CardiacMeshPopulationDM
-from data.SyntheticDataModules import SyntheticMeshesDM
+from data.SyntheticDataModules import SyntheticMeshesDataset, SyntheticMeshesDM
 from utils import mesh_operations
 from utils.mesh_operations import Mesh
 
 import pickle as pkl
 
 from easydict import EasyDict
-from typing import Mapping, Sequence
+from typing import Union, Mapping, Sequence
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -28,7 +28,7 @@ def scipy_to_torch_sparse(scp_matrix):
     return sparse_tensor
 
 
-def get_datamodule(config: Mapping, perform_setup: bool=True):
+def get_datamodule(dataset_params: Mapping, batch_size: Union[int, Sequence[int]], perform_setup: bool=True):
 
     '''
       Arguments:
@@ -37,15 +37,15 @@ def get_datamodule(config: Mapping, perform_setup: bool=True):
     '''
 
     # TODO: MERGE THESE TWO INTO ONE DATAMODULE CLASS
-    if config.dataset.data_type.startswith("cardiac"):
-        dm = CardiacMeshPopulationDM(cardiac_population=data, batch_size=config.batch_size)
+    if dataset_params.data_type.startswith("cardiac"):
+        dm = CardiacMeshPopulationDM(cardiac_population=data, batch_size=batch_size)
         
-    elif config.dataset.data_type.startswith("synthetic"):
+    elif dataset_params.data_type.startswith("synthetic"):
         dataset = SyntheticMeshesDataset(
-            data_params=config.dataset.parameters.__dict__,
-            preprocessing_params=config.dataset.preprocessing
+            data_params=dataset_params.parameters.__dict__,
+            preprocessing_params=dataset_params.preprocessing
         )
-        data_module = SyntheticMeshesDM(dataset, batch_size=config.batch_size)
+        data_module = SyntheticMeshesDM(dataset, batch_size=batch_size)
 
     if perform_setup:
         data_module.setup()
@@ -53,28 +53,33 @@ def get_datamodule(config: Mapping, perform_setup: bool=True):
     return data_module
 
 
-def get_coma_matrices(downsample_factors: Sequence[int], dm: pl.LightningDataModule, cache:bool=True, from_cached:bool=True):
+def get_coma_matrices(
+      downsample_factors: Sequence[int],
+      template, 
+      cache:bool=True, 
+      from_cached:bool=True
+    ):
     
     '''
     :param downsample_factors: list of downsampling factors, e.g. [2, 2, 2, 2]
-    :param dm: a PyTorch Lightning datamodule, with attributes train_dataset.dataset.mesh_popu and train_dataset.dataset.mesh_popu.template
+    :param template: a Namespace with attributes corresponding to vertices and faces
     :param cache: if True, will cache the matrices in a pkl file, unless this file already exists.
     :param from_cached: if True, will try to fetch the matrices from a previously cached pkl file.
     :return: a dictionary with keys "downsample_matrices", "upsample_matrices", "adjacency_matrices" and "n_nodes",
     where the first three elements are lists of matrices and the last is a list of integers.
     '''
 
-    mesh_popu = dm.train_dataset.dataset.mesh_popu
+    # mesh_popu = dm.train_dataset.dataset.mesh_popu
     
     matrices_hash = hash(
-        (mesh_popu._object_hash, tuple(downsample_factors))) % 1000000
+        (hash(template), tuple(downsample_factors))) % 1000000
     
     cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
 
     if from_cached and os.path.exists(cached_file):
         A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
     else:
-        template_mesh = Mesh(mesh_popu.template.vertices, mesh_popu.template.faces)
+        template_mesh = Mesh(template.vertices, template.faces)
         M, A, D, U = mesh_operations.generate_transform_matrices(
             template_mesh, downsample_factors,
         )
@@ -94,12 +99,12 @@ def get_coma_matrices(downsample_factors: Sequence[int], dm: pl.LightningDataMod
     }
 
 
-def get_coma_args(config: Mapping, dm: pl.LightningDataModule):
+def get_coma_args(config: Mapping, mesh_dataset: torch.utils.data.Dataset):
     
     '''
       Arguments:
-        - config:
-        - dm:    
+        - config: Namespace with all the necessary configuraton.
+        - mesh_dataset: torch Dataset with attributes mesh_popu.template with a template Mesh.
     '''
 
     net = config.network_architecture
@@ -123,7 +128,11 @@ def get_coma_args(config: Mapping, dm: pl.LightningDataModule):
 
     downsample_factors = config.network_architecture.pooling.parameters.downsampling_factors
     
-    matrices = get_coma_matrices(downsample_factors, dm, from_cached=False)
+    matrices = get_coma_matrices(
+        downsample_factors,                 
+        mesh_dataset.mesh_popu.template,         
+        from_cached=False
+    )
     coma_args.update(matrices)
 
     return EasyDict(coma_args)
@@ -250,20 +259,20 @@ def get_lightning_trainer(trainer_args: Mapping):
     return trainer
 
 
-def get_dm_model_trainer(config: Mapping, trainer_args: Mapping):
-    
-    '''
-      Arguments:
-        - config:
-        - dm:    
-      
-      Return:
-        a tuple of (PytorchLightning datamodule, PytorchLightning model, PytorchLightning trainer)
-    '''
-
-    # LOAD DATA
-    dm = get_datamodule(config)
-    model = get_lightning_module(config, dm)
-    trainer = get_lightning_trainer(trainer_args)
-
-    return dm, model, trainer
+# def get_dm_model_trainer(config: Mapping, trainer_args: Mapping):
+#     
+#     '''
+#       Arguments:
+#         - config:
+#         - dm:    
+#       
+#       Return:
+#         a tuple of (PytorchLightning datamodule, PytorchLightning model, PytorchLightning trainer)
+#     '''
+# 
+#     # LOAD DATA
+#     dm = get_datamodule(config)
+#     model = get_lightning_module(config, dm.dataset)
+#     trainer = get_lightning_trainer(trainer_args)
+# 
+#     return dm, model, trainer
