@@ -57,11 +57,11 @@ class Encoder3DMesh(nn.Module):
         cheb_polynomial_order: int,
         n_layers: int,
         n_nodes: int,
-        is_variational: bool,
-        latent_dim: int,
+        is_variational: bool,        
         template,
         adjacency_matrices: List[torch.Tensor],
         downsample_matrices: List[torch.Tensor],
+        latent_dim: Union[None, int] = None,
         activation_layers="ReLU"):
 
         super(Encoder3DMesh, self).__init__()
@@ -74,23 +74,26 @@ class Encoder3DMesh(nn.Module):
 
         self.matrices = {}
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
+
         self.matrices["A_edge_index"] = A_edge_index
         self.matrices["A_norm"] = A_norm
         self.matrices["downsample"] = downsample_matrices
-        
+                
         self._n_features_before_z = self.matrices["downsample"][-1].shape[0] * self.filters_enc[-1]
         self._is_variational = is_variational
         self.latent_dim = latent_dim
 
         self.activation_layers = [activation_layers] * n_layers if isinstance(activation_layers, str) else activation_layers
         self.layers = self._build_encoder()
+        
+        if self.latent_dim is not None:
+            # Fully connected layers connecting the last pooling layer and the latent space layer.
+            self.enc_lin_mu = torch.nn.Linear(self._n_features_before_z, self.latent_dim)
+    
+            if self._is_variational:
+                self.enc_lin_var = torch.nn.Linear(self._n_features_before_z, self.latent_dim)
 
-        # Fully connected layers connecting the last pooling layer and the latent space layer.
-        self.enc_lin_mu = torch.nn.Linear(self._n_features_before_z, self.latent_dim)
-
-        if self._is_variational:
-            self.enc_lin_var = torch.nn.Linear(self._n_features_before_z, self.latent_dim)
-
+                
     def _build_encoder(self):
 
         cheb_conv_layers = self._build_cheb_conv_layers(self.filters_enc, self.K)
@@ -129,7 +132,10 @@ class Encoder3DMesh(nn.Module):
         activation_layers = ModuleList()
 
         for i in range(len(activation_type)):
-            activ_fun = getattr(torch.nn.modules.activation, activation_type[i])()
+            if activation_type[i] is None:
+                activ_fun = torch.nn.Identity()
+            else: 
+                activ_fun = getattr(torch.nn.modules.activation, activation_type[i])()
             activation_layers.append(activ_fun)
 
         return activation_layers
@@ -138,7 +144,7 @@ class Encoder3DMesh(nn.Module):
     def _build_cheb_conv_layers(self, n_filters, K):
         # Chebyshev convolutions (encoder)
 
-        #TOFIX: this should be specified in the docs.
+        # TOFIX: this should be specified in the docs.
         if self.phase_input:
             n_filters[0] = 2 * n_filters[0]
 
@@ -161,18 +167,21 @@ class Encoder3DMesh(nn.Module):
         return list(adj_edge_index), list(adj_norm)
 
     
-    def concatenate_graph_features(self, x):        
-        x = x.reshape(x.shape[0], self._n_features_before_z)
+    def concatenate_graph_features(self, x):
+        # embed()
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        # x = x.reshape(x.shape[0], self._n_features_before_z)
         return x
 
 
-    def forward(self, x):
-
+    # perform a forward pass only through the convolutional stack (not the FCN layer)
+    def forward_conv_stack(self, x, preserve_graph_structure=True):
+        
         # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
             
             if self.matrices["downsample"][i].device != x.device:
-                self.matrices["downsample"][i] = self.matrices["upsample"][i].to(x.device)
+                self.matrices["downsample"][i] = self.matrices["downsample"][i].to(x.device)
             if self.matrices["A_edge_index"][i].device != x.device:
                 self.matrices["A_edge_index"][i] = self.matrices["A_edge_index"][i].to(x.device)
             if self.matrices["A_norm"][i].device != x.device:
@@ -185,11 +194,24 @@ class Encoder3DMesh(nn.Module):
                 embed()
             x = self.layers[layer]["activation_function"](x)
         
-        x = self.concatenate_graph_features(x)
-       
-        mu = self.enc_lin_mu(x)
-        log_var = self.enc_lin_var(x) if self._is_variational else None
-        return {"mu": mu, "log_var": log_var}
+        if not preserve_graph_structure:
+            x = self.concatenate_graph_features(x)
+            
+        return x
+    
+    
+    def forward(self, x):
+
+        z = self.forward_conv_stack(x)
+        
+        if self.latent_dim is not None:
+            mu = self.enc_lin_mu(x)
+            log_var = self.enc_lin_var(x) if self._is_variational else None        
+            z = {"mu": mu, "log_var": log_var}
+        else:
+            z = {"mu": z, "log_var": None}
+        
+        return z
 
 ################# DECODER #################
 
