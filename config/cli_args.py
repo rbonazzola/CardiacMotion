@@ -30,7 +30,7 @@ network_architecture_args = {
         "help": "Decimation factors for the mesh",
         "nargs": "+", "type": int,
         "action": ArgumentAction,
-        "dest": "config.network_architecture.pooling.downsampling_factors"},
+        "dest": "config.network_architecture.pooling.parameters.downsampling_factors"},
     ("--n_channels_enc",): {
         "help": "Number of channels (feature maps) in the encoder, from input to the most hidden layer.",
         "nargs": "+", "type": int,
@@ -221,7 +221,7 @@ CLI_args = {
         "action": "store_true",
         "help": "Display run's configuration"
     },
-    ("--dry-run", "--dry_run"): {
+    ("--dry-run", "--dry_run", "--dryrun"): {
         "dest": "dry_run",
         "default": False,
         "action": "store_true",
