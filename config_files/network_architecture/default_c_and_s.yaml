@@ -1,5 +1,5 @@
 {  
-  phase_input: true,
+  phase_input: false,
   latent_dim_c: 4,
   latent_dim_s: 4,
   n_features: 3,
