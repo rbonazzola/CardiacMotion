@@ -188,10 +188,10 @@ class Encoder3DMesh(nn.Module):
                 self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
   
             x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
-            try:
-                x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
-            except:
-                embed()
+            # try:
+            x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
+            # except:
+            #    embed()
             x = self.layers[layer]["activation_function"](x)
         
         if not preserve_graph_structure:
