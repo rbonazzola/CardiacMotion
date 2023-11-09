@@ -169,7 +169,8 @@ training_args = {
 }
 
 mlflow_args = {
-    ("--disable_mlflow_logging",): {
+    ("--disable_mlflow_logging", "--no_mlflow"): {
+        "dest": "disable_mlflow_logging",
         "help": "Set this flag if you don't want to log the run's data to MLflow.",
         "default": False,
         "action": "store_true"},
