@@ -19,15 +19,21 @@ class Autoencoder3DMesh(nn.Module):
 
         self.encoder = Encoder3DMesh(**enc_config)
         self.decoder = Decoder3DMesh(**dec_config)
+        # self.is_variational =
+        
 
     def forward(self, x):
 
         mu, logvar = self.encoder(x)
         # Add sampling if is_variational == True and it's in training mode
-        x_hat = self.decoder(mu)
+        # if self.is_variational and self.mode == "training":
+        # z = mu + normal * exp(logvar)
+        # else:
+        z = mu
+        x_hat = self.decoder(z)
         return x_hat
 
-    
+     
 ################# ENCODER #################
 
 ENCODER_ARGS = [
