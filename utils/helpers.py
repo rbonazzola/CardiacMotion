@@ -1,6 +1,6 @@
 import torch
 import os
-import sys; sys.path.append("..")
+import sys; # sys.path.append("..")
 
 import pytorch_lightning as pl
 
@@ -213,7 +213,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.callbacks import RichModelSummary
 
-early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=20)
+early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=100)
 
 model_checkpoint = ModelCheckpoint(monitor='val_loss', save_top_k=1)
 
