@@ -6,9 +6,20 @@ from models.Model3D import Encoder3DMesh, Decoder3DMesh
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
 
-from typing import Sequence, Union, List
+from typing import Sequence, Union, List, Literal
 from copy import copy
 from IPython import embed
+
+from copy import copy, deepcopy
+
+import logging
+
+
+logging.basicConfig(
+  level=logging.INFO, 
+  format='%(asctime)s - %(levelname)s - %(message)s',
+  datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 BATCH_DIMENSION = 0
 TIME_DIMENSION = 1
@@ -31,6 +42,12 @@ def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], 
     return self
 
 
+def sampling(mu, log_var):
+    std = torch.exp(0.5*log_var)
+    eps = torch.randn_like(std)
+    return eps.mul(std).add_(mu)
+
+
 COMMON_ARGS = [
     "num_features",
     "n_layers",
@@ -42,12 +59,19 @@ COMMON_ARGS = [
     "template",
 ]
 
+
+ENCODER_ARGS   = COMMON_ARGS + ["phase_input", "downsample_matrices", "num_conv_filters_enc", "latent_dim_c", "latent_dim_s"]
+DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content"]
+DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style", "n_timeframes"]
+
+
 class AutoencoderTemporalSequence(nn.Module):
 
     def __init__(self, 
                  encoder=None, decoder=None, 
                  enc_config=None, dec_c_config=None, dec_s_config=None, 
-                 z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp"):
+                 z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp", 
+                 is_variational=False):
 
         super(AutoencoderTemporalSequence, self).__init__()
         
@@ -57,20 +81,21 @@ class AutoencoderTemporalSequence(nn.Module):
             self.encoder = EncoderTemporalSequence(
                 enc_config, 
                 z_aggr_function=z_aggr_function, 
-                n_timeframes=n_timeframes
+                n_timeframes=n_timeframes,
+                is_variational=is_variational
             )
             
-        
         if decoder is not None:
             self.decoder = decoder
         else:            
             self.decoder = DecoderTemporalSequence(
                 dec_c_config, 
                 dec_s_config, 
-                phase_embedding_method=phase_embedding_method
+                phase_embedding_method=phase_embedding_method,
+                is_variational=is_variational
             )
             
-        # self._is_variational = self.encoder.encoder_3d_mesh._is_variational
+        self.is_variational = is_variational # self.encoder.encoder_3d_mesh._is_variational
 
         # self.template_mesh = dec_c_config["template"]
 
@@ -78,53 +103,24 @@ class AutoencoderTemporalSequence(nn.Module):
     def forward(self, s_t):
 
         z = self.encoder(s_t)
+        # z = self.sampling(mu, log_var)
         avg_s, shat_t = self.decoder(z)
                         
         return z, avg_s, shat_t
 
     
     def set_mode(self, mode: str):
-        '''
-        params:
-          mode: "training" or "testing"
-        '''
-        self._mode = mode
+        '''mode: "training" or "testing"'''
+        self.mode = mode
+        self.encoder.set_mode(mode)
+        self.decoder.set_mode(mode)
 
-
-##########################################################################################
-
-ENCODER_ARGS = copy(COMMON_ARGS)
-ENCODER_ARGS.extend([
-  "phase_input",
-  "downsample_matrices",
-  "num_conv_filters_enc",
-  "latent_dim_c",
-  "latent_dim_s"
-  #"latent_dim_content",
-  #"latent_dim_style"
-])
-
-def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], str]):
-
-    '''
-       Make attributes from an object's child visible from the (parent) object's namespace
-    '''
-
-    child = getattr(self, child)
-
-    if isinstance(attributes, str):
-        attributes = [attributes]
-
-    for attribute in attributes:
-        setattr(self, attribute, getattr(child, attribute))
-    return self
-
-
+    
 ##########################################################################################
 
 class EncoderTemporalSequence(nn.Module):
 
-    def __init__(self, encoder3d, z_aggr_function, phase_embedding=None, n_timeframes=None):
+    def __init__(self, encoder3d, z_aggr_function, phase_embedding=None, n_timeframes=None, is_variational=False):
 
         '''
         
@@ -135,14 +131,19 @@ class EncoderTemporalSequence(nn.Module):
         # encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
         # 
         # self.latent_dim = encoder_config["latent_dim"]
-        # Encoder3DMesh(**encoder_config)
+
         self.encoder_3d_mesh = encoder3d
 
         self = _steal_attributes_from_child(self, child="encoder_3d_mesh", attributes=["matrices"])
 
-        # self.z_aggr_function = self._get_z_aggr_function(z_aggr_function, n_timeframes)
-        self.z_aggr_function = z_aggr_function
+        self.z_aggr_function_mu = z_aggr_function        
+        self.z_aggr_function_log_var = deepcopy(z_aggr_function)
+        
+        torch.nn.init.normal_(self.z_aggr_function_log_var.fcn.weight, 0, 1e-5)
+        torch.nn.init.normal_(self.z_aggr_function_mu.fcn.weight, 0, 1e-5)
+        
         self.phase_embedding = phase_embedding
+        self.is_variational = is_variational
 
 
     def set_mode(self, mode: str):
@@ -150,54 +151,48 @@ class EncoderTemporalSequence(nn.Module):
         params:
           mode: "training" or "testing"
         '''
-        self._mode = mode
+        self.mode = mode
 
 
     def encoder(self, x):
                 
-        self.n_timeframes = x.shape[1]
+        self.n_timeframes = x.shape[TIME_DIMENSION]
 
-        # Iterate through time points                        
-        #bottleneck_t = [ self.encoder_3d_mesh(x[:, i, :]) for i in range(self.n_timeframes) ]
-        #mu = [ bottleneck["mu"] for bottleneck in bottleneck_t ]
+        # Iterate through time points
+        # bottleneck_t = [ self.encoder_3d_mesh(x[:, i, :]) for i in range(self.n_timeframes) ]
+        # mu = [ bottleneck["mu"] for bottleneck in bottleneck_t ]
 
         # If one element (and therefore all elements) are None, replace the whole thing with None
-        #log_var = [ bottleneck["log_var"] for bottleneck in bottleneck_t ] if bottleneck_t[0]["log_var"] is not None else None
+        # log_var = [ bottleneck["log_var"] for bottleneck in bottleneck_t ] if bottleneck_t[0]["log_var"] is not None else None
 
-        #mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
+        # mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
+        
         h = self.encoder_3d_mesh.forward_conv_stack(x, preserve_graph_structure=False)
-        z = self.z_aggr_function(h)
-
-        # if log_var is not None:
-        #     log_var_t = torch.cat(log_var).reshape(-1, self.n_timeframes, self.latent_dim)
-        #     log_var = self.z_aggr_function(log_var_t)
-
-        bottleneck = {"mu": z, "log_var": None}
+        mu = self.z_aggr_function_mu(h)
+        
+        if self.is_variational:
+            logging.debug("Generating mu and log_var.")
+            log_var = self.z_aggr_function_log_var(h)
+        else:
+            log_var = None
+            
+        bottleneck = {"mu": mu, "log_var": log_var}
         return bottleneck
 
 
     def forward(self, x):
         return self.encoder(x)
 
-
-    
+  
 ##########################################################################################
 
-DECODER_C_ARGS = copy(COMMON_ARGS)
-DECODER_C_ARGS.extend([
-  "upsample_matrices",
-  "num_conv_filters_dec_c",
-  "latent_dim_content"
-])
+PHASE_EMBEDDINGS = Literal[
+    "inverse_dft", "dft", 
+    "concatenation", "concat", 
+    "exponential_v1", "exp_v1", "exp", 
+    "exponential_v2", "exp_v2"
+] 
 
-DECODER_S_ARGS = copy(COMMON_ARGS)
-DECODER_S_ARGS.extend([
-    "upsample_matrices",
-    "num_conv_filters_dec_s",
-    "latent_dim_content",
-    "latent_dim_style",
-    "n_timeframes"
-])
 
 class DecoderContent(Decoder3DMesh):
     
@@ -208,17 +203,8 @@ class DecoderContent(Decoder3DMesh):
         decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
         
         super(DecoderContent, self).__init__(**decoder_c_config)
-
-
-from typing import Literal
-
-PHASE_EMBEDDINGS = Literal[
-    "inverse_dft", "dft", 
-    "concatenation", "concat", 
-    "exponential_v1", "exp_v1", "exp", 
-    "exponential_v2", "exp_v2"
-]                    
-        
+                 
+            
 class DecoderStyle(nn.Module):
 
     def __init__(self, decoder_config: dict, 
@@ -278,7 +264,7 @@ class DecoderStyle(nn.Module):
 class DecoderTemporalSequence(nn.Module):
 
     # def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method: PHASE_EMBEDDINGS = "exp", n_timeframes=None):
-    def __init__(self, decoder_content, decoder_style):
+    def __init__(self, decoder_content, decoder_style, is_variational):
 
         super(DecoderTemporalSequence, self).__init__()
 
@@ -291,6 +277,8 @@ class DecoderTemporalSequence(nn.Module):
         
         self.decoder_content = decoder_content
         self.decoder_style = decoder_style
+        self.is_variational = is_variational
+        
         self = _steal_attributes_from_child(self, child="decoder_content", attributes=["matrices"])
     
 
@@ -305,10 +293,26 @@ class DecoderTemporalSequence(nn.Module):
     def forward(self, z):
 
         bottleneck = self._partition_z(z["mu"], z["log_var"])
-        z_c, z_s = bottleneck["mu_c"], bottleneck["mu_s"]
+        
+        mu_c, mu_s = bottleneck["mu_c"], bottleneck["mu_s"]
+        
+        if self.is_variational and self._mode == "training":
+            logging.debug("Sampling z.")
+            log_var_c, log_var_s = bottleneck["log_var_c"], bottleneck["log_var_s"]
+            z_c = sampling(mu_c, log_var_c)
+            z_s = sampling(mu_s, log_var_s)
+        else:
+            z_c, z_s = mu_c, mu_s
+        
+        # Compute time-averaged shape
         avg_shape = self.decoder_content(z_c)
-        def_field_t = self.decoder_style(z_c, z_s, self.decoder_style.n_timeframes)
+        
+        # Compute deformation with respect to time-averaged shape
+        def_field_t = self.decoder_style(z_c, z_s, self.decoder_style.n_timeframes)        
+        
+        # Compute shape at time t
         shape_t = avg_shape.unsqueeze(TIME_DIMENSION) + def_field_t
+        
         return avg_shape, shape_t
 
 

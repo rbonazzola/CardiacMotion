@@ -19,15 +19,21 @@ class Autoencoder3DMesh(nn.Module):
 
         self.encoder = Encoder3DMesh(**enc_config)
         self.decoder = Decoder3DMesh(**dec_config)
+        # self.is_variational =
+        
 
     def forward(self, x):
 
         mu, logvar = self.encoder(x)
         # Add sampling if is_variational == True and it's in training mode
-        x_hat = self.decoder(mu)
+        # if self.is_variational and self.mode == "training":
+        # z = mu + normal * exp(logvar)
+        # else:
+        z = mu
+        x_hat = self.decoder(z)
         return x_hat
 
-    
+     
 ################# ENCODER #################
 
 ENCODER_ARGS = [
@@ -188,10 +194,10 @@ class Encoder3DMesh(nn.Module):
                 self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
   
             x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
-            try:
-                x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
-            except:
-                embed()
+            # try:
+            x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
+            # except:
+            #    embed()
             x = self.layers[layer]["activation_function"](x)
         
         if not preserve_graph_structure:
