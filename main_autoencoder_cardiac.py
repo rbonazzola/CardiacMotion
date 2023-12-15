@@ -39,7 +39,7 @@ from models.Model4D import DecoderStyle, DecoderContent, DecoderTemporalSequence
 from models.Model4D import EncoderTemporalSequence, AutoencoderTemporalSequence
 from lightning.ComaLightningModule import CoMA_Lightning
 
-from models.lightning.EncoderLightningModule import TemporalEncoderLightning
+from lightning.EncoderLightningModule import TemporalEncoderLightning
 from models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
 
 partitions = {
@@ -326,8 +326,8 @@ if __name__ == "__main__":
     
     mesh_template = mesh_dm.dataset.template_mesh
     
-    config.network_architecture.latent_dim_c = 8 
-    config.network_architecture.latent_dim_s = 8 
+    config.network_architecture.latent_dim_c = 16 
+    config.network_architecture.latent_dim_s = 16
     coma_args = get_coma_args(config)
     coma_matrices = get_coma_matrices(config, mesh_template, PARTITION)
     coma_args.update(coma_matrices)

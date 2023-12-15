@@ -40,7 +40,7 @@ from models.Model4D import DECODER_C_ARGS, DECODER_S_ARGS, ENCODER_ARGS
 from models.Model4D import DecoderStyle, DecoderContent, DecoderTemporalSequence 
 from models.Model4D import EncoderTemporalSequence, AutoencoderTemporalSequence
 from lightning.ComaLightningModule import CoMA_Lightning
-from models.lightning.EncoderLightningModule import TemporalEncoderLightning
+from lightning.EncoderLightningModule import TemporalEncoderLightning
 from models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
 
 ################################################################################
