@@ -45,37 +45,72 @@ from models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
 
 ################################################################################
 
-mlflow_uri = "/home/rodrigo/01_repos/CardiacMotion/mlruns/"
+mlflow_uri = f"{os.environ['HOME']}/01_repos/CardiacMotion/mlruns/"
 mlflow.set_tracking_uri(mlflow_uri)
 
-runs_df = mlflow.search_runs(experiment_ids=['4'])
+runs_df = mlflow.search_runs(experiment_ids=['3', '4', '5', '6', '7', '8'])
     
 if len(runs_df) == 0:
     raise ValueError(f"No runs found under URI {mlflow_uri} and experiment {experiment_ids}.")
 
-runs_df = runs_df[runs_df["metrics.test_recon_loss"] < 3]
+runs_df = runs_df[runs_df["metrics.val_recon_loss_c"] < 3]
 runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
 # print(runs_df)
 
 runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/rodrigo/CISTIB/repos/", "/mnt/data/workshop/workshop-user1/output/"))
 runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/home01/scrb/01_repos/", "/mnt/data/workshop/workshop-user1/output/"))    
 runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/1/", "/3/"))
-runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/user/", "/rodrigo/"))
+# runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/user/", "/rodrigo/"))
+
+################################################################################
+
+MESHES_PATH = "/mnt/data/workshop/workshop-user1/datasets/meshes/Results_Yan/"
+
+fhm_mesh = Cardiac3DMesh(
+  filename=f"{MESHES_PATH}/1000511/models/FHM_res_0.1_time001.npy",
+  faces_filename=f"{os.environ['HOME']}/01_repos/CardioMesh/data/faces_fhm_10pct_decimation.csv",
+  subpart_id_filename=f"{os.environ['HOME']}/01_repos/CardioMesh/data/subpartIDs_FHM_10pct.txt"
+)
+
+################################################################################
+
+
 
 ################################################################################
 
 class Run():
     
-    def __init__(self, run_id, exp_id):
+    def __init__(self, runinfo, load_model=True, load_dataloader=True):
         
-        self.exp_id = exp_id
-        self.run_id = run_id
+        self.exp_id = runinfo.experiment_id
+        self.run_id = runinfo.run_id
 
-        self._PARTITION = "left_ventricle"
+        self._partition_mapping = {   
+            3: "right_ventricle",
+            4: "left_ventricle",
+            5: "biventricle",
+            6: "left_atrium",
+            7: "right_atrium",
+            8: "aorta"
+        }
+        
+        self.partition = self._partition_mapping[int(self.exp_id)]  
         self._FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
-        self._MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{self._PARTITION}.npy"
-        self._PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{self._PARTITION}.pkl"
-        self._SUBSETTING_MATRIX_FILE = f"/home/user/01_repos/CardioMesh/data/cached/subsetting_matrix_{self._PARTITION}.pkl"
+        self._MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{self.partition}.npy"
+        self._PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{self.partition}.pkl"
+        self._SUBSETTING_MATRIX_FILE = f"/home/user/01_repos/CardioMesh/data/cached/subsetting_matrix_{self.partition}.pkl"
+        self.mean_shape = np.load(self._MEAN_ACROSS_CYCLE_FILE)
+        self.faces = fhm_mesh[partitions[self.partition]].f
+        
+        self.model_weights = None
+        self.z_df = None
+        
+        if load_model:
+            self.load_model()
+            
+        if load_dataloader:
+            self.load_dataloader()
+    
     
     def get_ckpt_path(self):
         
@@ -99,7 +134,6 @@ class Run():
                 pass
             
             if len(checkpoints) > 1:
-                # finetuned_runs_2/1/3b09d025cc1446f3a0c27f9b27b69340/checkpoints/epoch=129-val_recon_loss=0.4883_val_kld_loss=94.8229.ckpt.ckpt
                 regex = re.compile(".*epoch=(.*)-.*.ckpt")
                 epochs = []
                 for chkpt_file in checkpoints:
@@ -115,12 +149,12 @@ class Run():
             checkpoint_locations[row.run_id] = chkpt_file
           
         checkpoint_locations = { 
-            k:v for k,v in checkpoint_locations.items() if v is not None
+            k: v for k, v in checkpoint_locations.items() if v is not None
         }
         
         return checkpoint_locations[self.run_id]
-    # runs = checkpoint_locations.keys()
-        
+
+    
     def load_weights(self):
         
         ckpt_path = self.get_ckpt_path()
@@ -128,19 +162,43 @@ class Run():
         print(f"Loaded weights from checkpoint:\n {ckpt_path}")
         model_weights = EasyDict({k.replace("model.", ""): v for k, v in model_weights.items()})        
         model_weights = EasyDict({k.replace("z_aggr_function", "z_aggr_function_mu"): v for k, v in model_weights.items()})
-        
+        self.model_weights = model_weights
         return model_weights
     
     
+    def load_dataloader(self):
+        
+        NT = 10 # config.dataset.parameters.T
+
+        subsetting_matrix = pkl.load(open(self._SUBSETTING_MATRIX_FILE, "rb"))
+    
+        template = EasyDict({
+          "v": np.load(self._MEAN_ACROSS_CYCLE_FILE),
+          "f": fhm_mesh[partitions[self.partition]].f
+        })
+        
+        print("Loading datamodule...")
+        cardiac_dataset = CardiacMeshPopulationDataset(
+            root_path=f"{os.environ['HOME']}/01_repos/CardiacMotion/data/cardio/Results", 
+            procrustes_transforms=self._PROCRUSTES_FILE,
+            faces=template.f,
+            subsetting_matrix=subsetting_matrix,
+            template_mesh=template,
+            N_subj=None,
+            phases_filter=1+(50/NT)*np.array(range(NT))
+        )
+        
+        print(f"Length of dataset: {len(cardiac_dataset)}")  
+        mesh_dl = torch.utils.data.DataLoader(cardiac_dataset, batch_size=128, num_workers=16)
+        
+        self.dataloader = mesh_dl
+        
+    
     def build_model_from_ckpt(self):
         
-        try:
-            model_weights["encoder.encoder_3d_mesh.layers.layer_2.graph_conv.lins.11.weight"]
-            POLYNOMIAL_DEGREE = 12
-        except:
-            POLYNOMIAL_DEGREE = 10
+        polynomial_degree = self.get_polynomial_degree()
     
-        config.network_architecture.convolution.parameters.polynomial_degree = [POLYNOMIAL_DEGREE] * 4
+        config.network_architecture.convolution.parameters.polynomial_degree = [polynomial_degree] * 4
         ################################################
       
         subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
@@ -150,24 +208,90 @@ class Run():
           "f": fhm_mesh[partitions[PARTITION]].f
         })
 
-
+        
     def _get_z_path(self):
         
-        z_file = f"{mlflow_uri}/4/{self.run_id}/artifacts/latent_vector.csv"
-        if not os.path.exists(z_file):
-            raise FileNotFoundError(f"{z_file} does not exist. Skipping...")
+        z_file = f"{mlflow_uri}/{self.exp_id}/{self.run_id}/artifacts/latent_vector.csv"
             
         return z_file
 
+    
+    def generate_z_df(self):
+        
+        zfile = self._get_z_path()
+        
+        if not os.path.exists(zfile):    
+        
+            torch.cuda.empty_cache()
+        
+            zs = []
+            
+            for i, x in enumerate(self.dataloader):
+                
+                # if (i % 10) == 0:
+                # print(i)
+                    
+                if i < (len(zs)-1):
+                    continue
+                
+                x['s_t'] = x['s_t'].to("cuda:0")
+                z = self.model.encoder(x['s_t'])
+                z = z['mu'].detach().cpu().numpy()
+                zs.append(z)
+                
+                # zs.append(z)
+                torch.cuda.empty_cache() 
+            
+            zs_concat = np.concatenate(zs)
+            z_df = pd.DataFrame(zs_concat, index=self.dataloader.dataset.ids)
+            del zs_concat, zs
+            
+            # colnames before: 0, 1, 2, 3
+            z_df.columns = [ f"z{str(i).zfill(3)}" for i in range(16) ]
+            # colnames after: z000, z001, z002, z003
+            
+            z_df = z_df.reset_index().rename({"index": "ID"}, axis=1)
+            z_df.to_csv(zfile, index=False)        
+    
+    
     def get_z_df(self):
         
         z_file = self._get_z_path()
-        z_df = pd.read_csv(z_file).set_index("ID")
-        return z_df
+        if not os.path.exists(z_file):
+            raise FileNotFoundError(f"{z_file} does not exist. Skipping...")
+                
+        if self.z_df is None:
+            z_df = pd.read_csv(z_file).set_index("ID")
+            return z_df
+        else:
+            return self.z_df
     
+    
+    def get_polynomial_degree(self):
+        
+        regex = re.compile("encoder.encoder_3d_mesh.layers.layer_0.graph_conv.lins.(.*).weight")
+        return max([int(regex.match(x).group(1)) for x in self.model_weights.keys() if regex.match(x)]) + 1
+    
+    
+    def get_n_channels(self):
+        
+        return [self.model_weights[f"encoder.encoder_3d_mesh.layers.layer_{l}.graph_conv.lins.0.weight"].shape[0] for l in range(0, 4)]
+    
+    
+    def load_model(self):
+        
+        model_weights = self.load_weights()
+        
+        pol_degree = self.get_polynomial_degree()
+        n_channels = self.get_n_channels()
+        
+        t_ae = get_model(partition=self.partition, polynomial_degree=pol_degree, n_channels=n_channels)
+        t_ae.load_state_dict(model_weights, strict=False)
+        
+        self.model = t_ae
 
-
-def get_model(polynomial_degree=10):
+    
+def get_model(partition="left_ventricle", polynomial_degree=10, n_channels=[16, 16, 32, 32]):
 
     from main_autoencoder_cardiac import get_coma_args
     
@@ -180,28 +304,20 @@ def get_model(polynomial_degree=10):
       "aorta" : ("aorta",)
     }
     
-    PARTITION = "left_ventricle"
-    FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
-    MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{PARTITION}.npy"
-    PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{PARTITION}.pkl"    
-    SUBSETTING_MATRIX_FILE = f"utils/CardioMesh/data/cached/subsetting_matrix_{PARTITION}.pkl" 
-    MESHES_PATH = "/home/rodrigo/01_repos/CardiacMotionRL/data/cardio/meshes"
+    # FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
+    MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{partition}.npy"
+    PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{partition}.pkl"    
+    SUBSETTING_MATRIX_FILE = f"utils/CardioMesh/data/cached/subsetting_matrix_{partition}.pkl" 
     
     subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
     
-    ID = "1000511"
-    fhm_mesh = Cardiac3DMesh(
-       filename=f"/home/rodrigo/doctorado/data/meshes/Results/{ID}/models/FHM_res_0.1_time001.npy",
-       faces_filename="/home/rodrigo/01_repos/CardioMesh/data/faces_fhm_10pct_decimation.csv",
-       subpart_id_filename="/home/rodrigo/01_repos/CardioMesh/data/subpartIDs_FHM_10pct.txt"
-    )
     mean_shape = np.load(MEAN_ACROSS_CYCLE_FILE)
-    faces = fhm_mesh[partitions[PARTITION]].f
+    faces = fhm_mesh[partitions[partition]].f
     template = EasyDict({ "v": mean_shape, "f": faces })
     
     N_subj = 10
     NT = 10
-    PHASES = 1+(50/NT)*np.array(range(NT)) # 1, 6, 11, 16, 21...
+    PHASES = 1 + (50/NT) * np.array(range(NT)) # 1, 6, 11, 16, 21...
     
     cardiac_dataset = CardiacMeshPopulationDataset(
         root_path=MESHES_PATH, 
@@ -218,18 +334,21 @@ def get_model(polynomial_degree=10):
     mesh_dm.setup()
     x = EasyDict(next(iter(mesh_dm.train_dataloader())))
        
-    POLYNOMIAL_DEGREE = polynomial_degree
-    DOWNSAMPLING = 3
-    
     config = load_yaml_config("config_folded_c_and_s.yaml")
+
+    POLYNOMIAL_DEGREE = polynomial_degree
+    config.network_architecture.convolution.channels_enc = n_channels
+    config.network_architecture.convolution.channels_dec_c = n_channels
+    config.network_architecture.convolution.channels_dec_s = n_channels
     config.network_architecture.convolution.parameters.polynomial_degree = [POLYNOMIAL_DEGREE] * 4
     config.network_architecture.pooling.parameters.downsampling_factors = [3, 3, 2, 2] # * 4
+    
     config.network_architecture.latent_dim_c = 8 
     config.network_architecture.latent_dim_s = 8
     config.loss.regularization.weight = 0
     
     coma_args = get_coma_args(config)
-    coma_matrices = get_coma_matrices(config, template, PARTITION)
+    coma_matrices = get_coma_matrices(config, template, partition)
     coma_args.update(coma_matrices)
     
     enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
@@ -245,10 +364,13 @@ def get_model(polynomial_degree=10):
     decoder_config_c = EasyDict({ k:v for k,v in coma_args.items() if k in DECODER_C_ARGS })
     decoder_config_s = EasyDict({ k:v for k,v in coma_args.items() if k in DECODER_S_ARGS })
     decoder_content = DecoderContent(decoder_config_c)
-    decoder_style = DecoderStyle(decoder_config_s, phase_embedding_method="exp_v1")
+    decoder_style = DecoderStyle(decoder_config_s, phase_embedding_method="exp_v1", n_timeframes=50)
     t_decoder = DecoderTemporalSequence(decoder_content, decoder_style, is_variational=coma_args.is_variational)
         
     t_ae = AutoencoderTemporalSequence(encoder=t_encoder, decoder=t_decoder, is_variational=coma_args.is_variational)
     t_ae.decoder._mode = "inference"
+    
+    if torch.cuda.is_available():
+        t_ae = t_ae.to("cuda:0")
     
     return t_ae
