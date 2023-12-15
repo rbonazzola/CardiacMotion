@@ -62,7 +62,7 @@ COMMON_ARGS = [
 
 ENCODER_ARGS   = COMMON_ARGS + ["phase_input", "downsample_matrices", "num_conv_filters_enc", "latent_dim_c", "latent_dim_s"]
 DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content"]
-DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style", "n_timeframes"]
+DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style"]#, "n_timeframes"]
 
 
 class AutoencoderTemporalSequence(nn.Module):
@@ -214,7 +214,8 @@ class DecoderStyle(nn.Module):
         super(DecoderStyle, self).__init__()
 
         decoder_config = copy(decoder_config)
-        self.n_timeframes = decoder_config.pop("n_timeframes")
+        # self.n_timeframes = decoder_config.pop("n_timeframes")
+        self.n_timeframes = n_timeframes
         self.phase_embedding = self._get_phase_embedding(phase_embedding_method, self.n_timeframes)
 
         decoder_config = copy(decoder_config)
