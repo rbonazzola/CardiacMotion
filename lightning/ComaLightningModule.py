@@ -24,25 +24,43 @@ def mse(s1, s2=None):
 class CoMA_Lightning(pl.LightningModule):
 
 
-    def __init__(self, model: AutoencoderTemporalSequence, params: Namespace):
+    def __init__(self, 
+                 model: AutoencoderTemporalSequence, 
+                 loss_params: Namespace, 
+                 optimizer_params: Namespace,
+                 additional_params: Namespace,
+                 mesh_template=None
+                ):
 
-        """
+        '''
         :param model: PyTorch model.
         :param params: a Namespace with additional parameters
-        """
+        
+        Example:
+        from Easydict import EasyDict
+        
+        loss_params = EasyDict({
+          "reconstruction_c.weight": ,
+          "reconstruction_s.weight": ,
+          "regularization.weight":          
+        })          
+        '''
 
         super(CoMA_Lightning, self).__init__()
         self.model = model
-        self.params = params
+        self.loss_params = loss_params
+        self.optimizer_params = optimizer_params
+        self.additional_params = additional_params
+        self.mesh_template = mesh_template 
 
         self.rec_loss = self.get_rec_loss()
 
 
     def get_rec_loss(self):
 
-        self.w_s = self.params.loss.reconstruction_s.weight
-        self.w_kl = self.params.loss.regularization.weight
-        return losses_menu[self.params.loss.reconstruction_c.type.lower()]
+        self.w_s = self.loss_params.reconstruction_s.weight
+        self.w_kl = self.loss_params.regularization.weight
+        return losses_menu[self.loss_params.reconstruction_c.type.lower()]
 
             
     def KL_div(self, mu, log_var):
@@ -69,16 +87,6 @@ class CoMA_Lightning(pl.LightningModule):
             self.model.encoder.matrices['A_norm'][i] = self.model.encoder.matrices['A_norm'][i].to(self.device)
 
         
-        #for i, _ in enumerate(self.model.downsample_matrices):
-        #    self.model.downsample_matrices[i] = self.model.downsample_matrices[i].to(self.device)
-        #    self.model.upsample_matrices[i] = self.model.upsample_matrices[i].to(self.device)
-        #    self.model.adjacency_matrices[i] = self.model.adjacency_matrices[i].to(self.device)
-#
-        #for i, _ in enumerate(self.model.A_edge_index):
-        #    self.model.A_edge_index[i] = self.model.A_edge_index[i].to(self.device)
-        #    self.model.A_norm[i] = self.model.A_norm[i].to(self.device)
-#
-                    
     def on_train_epoch_start(self):
         self.model.set_mode("training")
 
@@ -95,7 +103,7 @@ class CoMA_Lightning(pl.LightningModule):
 
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
-        if self.model._is_variational:            
+        if hasattr(self.model, "is_variational") and self.model.is_variational:            
             bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])            
             self.mu_c = bottleneck["mu_c"]
             self.log_var_c = bottleneck["log_var_c"]
@@ -151,7 +159,6 @@ class CoMA_Lightning(pl.LightningModule):
         
     def on_validation_epoch_start(self):
         self.model.set_mode("training")
-
         
     def _shared_eval_step(self, batch, batch_idx):
 
@@ -172,7 +179,7 @@ class CoMA_Lightning(pl.LightningModule):
         recon_loss_s = self.rec_loss(s_t, shat_t)
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
-        if self.model._is_variational:
+        if hasattr(self.model, "is_variational") and self.model.is_variational:
             
             bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])
             
@@ -260,6 +267,8 @@ class CoMA_Lightning(pl.LightningModule):
           logger=True
         )
 
+    def on_test_epoch_start(self):
+        self.model.set_mode("testing")
         
     def test_step(self, batch, batch_idx):
                 
@@ -312,14 +321,15 @@ class CoMA_Lightning(pl.LightningModule):
         
         bottleneck, time_avg_s_hat, s_hat_t = self(s_t)
 
+
         ### IMAGES OF TEMPORAL AVERAGE
-        if self.params.dataset.preprocessing.center_around_mean:
-            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0].cpu()+self.model.template_mesh.v, self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_orig.png")
-            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0].cpu()+self.model.template_mesh.v, self.model.template_mesh.f, f"temporal_avg_mesh_{batch_idx}_rec.png")
+        if self.additional_params.dataset.preprocessing.center_around_mean:
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0].cpu()+self.mesh_template.vertices, self.mesh_template.faces, f"temporal_avg_mesh_{batch_idx}_orig.png")
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0].cpu()+self.mesh_template.vertices, self.mesh_template.faces, f"temporal_avg_mesh_{batch_idx}_rec.png")
         else:
-            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.model.template_mesh.f,
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s[0], self.mesh_template.faces,
                                                        f"temporal_avg_mesh_{batch_idx}_orig.png")
-            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.model.template_mesh.f,
+            SyntheticMeshPopulation.render_mesh_as_png(time_avg_s_hat[0], self.mesh_template.faces,
                                                        f"temporal_avg_mesh_{batch_idx}_rec.png")
 
         merge_pngs_horizontally(f"temporal_avg_mesh_{batch_idx}_orig.png", f"temporal_avg_mesh_{batch_idx}_rec.png", f"temporal_avg_mesh_{batch_idx}.png")
@@ -330,12 +340,12 @@ class CoMA_Lightning(pl.LightningModule):
         )
 
         ### ANIMATIONS OF MOVING MESH
-        if self.params.dataset.preprocessing.center_around_mean:
-            SyntheticMeshPopulation._generate_gif(s_t.cpu()+self.model.template_mesh.v, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
-            SyntheticMeshPopulation._generate_gif(s_hat_t.cpu() + self.model.template_mesh.v, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+        if self.additional_params.dataset.preprocessing.center_around_mean:
+            SyntheticMeshPopulation._generate_gif(s_t.cpu()+self.mesh_template.vertices, self.mesh_template.faces, f"moving_mesh_{batch_idx}_orig.gif")
+            SyntheticMeshPopulation._generate_gif(s_hat_t.cpu() + self.mesh_template.vertices, self.mesh_template.faces, f"moving_mesh_{batch_idx}_rec.gif")
         else:
-            SyntheticMeshPopulation._generate_gif(s_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_orig.gif")
-            SyntheticMeshPopulation._generate_gif(s_hat_t, self.model.template_mesh.f, f"moving_mesh_{batch_idx}_rec.gif")
+            SyntheticMeshPopulation._generate_gif(s_t, self.mesh_template.faces, f"moving_mesh_{batch_idx}_orig.gif")
+            SyntheticMeshPopulation._generate_gif(s_hat_t, self.mesh_template.faces, f"moving_mesh_{batch_idx}_rec.gif")
 
         merge_gifs_horizontally(f"moving_mesh_{batch_idx}_orig.gif", f"moving_mesh_{batch_idx}_rec.gif", f"moving_mesh_{batch_idx}.gif")
         self.logger.experiment.log_artifact(
@@ -350,9 +360,9 @@ class CoMA_Lightning(pl.LightningModule):
 
     def configure_optimizers(self):
 
-        algorithm = self.params.optimizer.algorithm
+        algorithm = self.optimizer_params.algorithm
         algorithm = torch.optim.__dict__[algorithm]
-        parameters = vars(self.params.optimizer.parameters)
+        parameters = vars(self.optimizer_params.parameters)
         optimizer = algorithm(self.model.parameters(), **parameters)
         return optimizer
 

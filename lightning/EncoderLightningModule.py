@@ -10,7 +10,7 @@ from IPython import embed # uncomment for debugging
 # from models.Model4D import  EncoderTemporalSequence
 # from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
-# from image_helpers import *
+from image_helpers import *
 
 losses_menu = {
   "l1": F.l1_loss,
