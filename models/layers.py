@@ -9,7 +9,7 @@ import shlex
 # import sys; sys.path.append(".")
 
 from IPython import embed
-from utils.utils import normal
+from .utils import normal
 
 __author__ = ['Priyanka Patel', 'Rodrigo Bonazzola']
 
@@ -100,7 +100,7 @@ class Pool(MessagePassing):
 
     def forward(self, x, pool_mat=None,  dtype=None):
         if self.pool_mat is None:
-            pool_mat = pool_mat.transpose(0, 1)
+            pool_mat = pool_mat.clone().transpose(0, 1)
         if self.pool_mat is not None:
             pool_mat = self.pool_mat
         out = self.propagate(edge_index=pool_mat._indices(), x=x, norm=pool_mat._values(), size=pool_mat.size())
