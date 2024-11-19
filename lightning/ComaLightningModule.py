@@ -55,6 +55,10 @@ class CoMA_Lightning(pl.LightningModule):
 
         self.rec_loss = self.get_rec_loss()
 
+        self.train_outputs = []
+        self.val_outputs = []
+        self.test_outputs = []
+
 
     def get_rec_loss(self):
 
@@ -86,6 +90,10 @@ class CoMA_Lightning(pl.LightningModule):
             self.model.encoder.matrices['A_edge_index'][i] = self.model.encoder.matrices['A_edge_index'][i].to(self.device)
             self.model.encoder.matrices['A_norm'][i] = self.model.encoder.matrices['A_norm'][i].to(self.device)
 
+        # embed()
+        # self.precision_to_set  = self.trainer.precision
+        # self.batch_size_to_set = self.trainer.train_dataloader.batch_size
+        
         
     def on_train_epoch_start(self):
         self.model.set_mode("training")
@@ -103,7 +111,9 @@ class CoMA_Lightning(pl.LightningModule):
 
         recon_loss = recon_loss_c + self.w_s * recon_loss_s
 
-        if hasattr(self.model, "is_variational") and self.model.is_variational:            
+        current_epoch = self.current_epoch
+
+        if hasattr(self.model, "is_variational") and self.model.is_variational and current_epoch > 5:            
             bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])            
             self.mu_c = bottleneck["mu_c"]
             self.log_var_c = bottleneck["log_var_c"]
@@ -127,19 +137,20 @@ class CoMA_Lightning(pl.LightningModule):
            "loss": train_loss
         }
 
+        self.train_outputs.append(loss_dict)
         # https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#log-dict
         self.log_dict(loss_dict)
         return loss_dict
 
-    def training_epoch_end(self, outputs):
+    def on_train_epoch_end(self):
 
         # Aggregate metrics from each batch
 
-        avg_kld_loss = torch.stack([x["training_kld_loss"] for x in outputs]).mean()
-        avg_recon_loss_c = torch.stack([x["training_recon_loss_c"] for x in outputs]).mean()
-        avg_recon_loss_s = torch.stack([x["training_recon_loss_s"] for x in outputs]).mean()
-        avg_recon_loss = torch.stack([x["training_recon_loss"] for x in outputs]).mean()
-        avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
+        avg_kld_loss = torch.stack([x["training_kld_loss"] for x in self.train_outputs]).mean()
+        avg_recon_loss_c = torch.stack([x["training_recon_loss_c"] for x in self.train_outputs]).mean()
+        avg_recon_loss_s = torch.stack([x["training_recon_loss_s"] for x in self.train_outputs]).mean()
+        avg_recon_loss = torch.stack([x["training_recon_loss"] for x in self.train_outputs]).mean()
+        avg_loss = torch.stack([x["loss"] for x in self.train_outputs]).mean()
 
         self.log_dict({
             "training_kld_loss": avg_kld_loss,
@@ -153,6 +164,10 @@ class CoMA_Lightning(pl.LightningModule):
           logger=True,
         )
 
+        print(f'Memory allocated: {torch.cuda.memory_allocated()} bytes')
+        print(f'Memory cached: {torch.cuda.memory_reserved()} bytes')
+
+        self.train_outputs.clear()
         # https://pytorch-lightning.readthedocs.io/en/latest/starter/introduction_guide.html#logging
         # self.log("my_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
@@ -160,6 +175,22 @@ class CoMA_Lightning(pl.LightningModule):
     def on_validation_epoch_start(self):
         self.model.set_mode("training")
         
+
+    # def on_training_epoch_start(self):
+    #     
+    #     if self.current_epoch < 1:
+    #         self.batch_size = 32
+    #         self.precision = 32
+    #         self.trainer.precision = 32
+    #         self.trainer.train_dataloader.batch_size = self.batch_size  # Update batch size
+    #     else:
+    #         print(f"Chaning batch size (to {self.precision_to_set}) and batch_size (to {self.batch_size_to_set})")
+    #         self.batch_size = self.batch_size_to_set
+    #         self.precision = self.precision_to_set
+    #         self.trainer.precision = self.precision
+    #         self.trainer.train_dataloader.batch_size = self.batch_size  # Update batch size
+
+    
     def _shared_eval_step(self, batch, batch_idx):
 
         '''
@@ -206,9 +237,7 @@ class CoMA_Lightning(pl.LightningModule):
         rec_ratio_to_pop_mean_c = rec_ratio_to_pop_mean_c.mean()
         rec_ratio_to_pop_mean = rec_ratio_to_pop_mean.mean()
         rec_ratio_to_time_mean = rec_ratio_to_time_mean.mean()
-        
-        # embed()
-        
+               
         return loss,\
                recon_loss, recon_loss_c, recon_loss_s,\
                kld_loss_c, kld_loss_s, kld_loss,\
@@ -235,22 +264,33 @@ class CoMA_Lightning(pl.LightningModule):
           "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
         
+        self.val_outputs.append(loss_dict)
         self.log_dict(loss_dict)
         return loss_dict
 
     
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
 
         #TODO: iterate over keys of the elements of `outputs`
 
-        avg_kld_loss = torch.stack([x["val_kld_loss"] for x in outputs]).mean()
-        avg_recon_loss = torch.stack([x["val_recon_loss"] for x in outputs]).mean()
-        avg_recon_loss_c = torch.stack([x["val_recon_loss_c"] for x in outputs]).mean()
-        avg_recon_loss_s = torch.stack([x["val_recon_loss_s"] for x in outputs]).mean()
-        avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
-        rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in outputs]).mean()
-        rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in outputs]).mean()
-        rec_ratio_to_pop_mean_c = torch.stack([x["val_rec_ratio_to_pop_mean_c"] for x in outputs]).mean()
+         
+        # kk = []
+        # for x in self.val_outputs:
+        #     try:
+        #       kk.append(x["val_kld_loss"])
+        #     except:
+        #       print(x)
+        #       
+        # avg_kld_loss = torch.stack(kk).mean()
+        avg_kld_loss = torch.stack([x["val_kld_loss"] for x in self.val_outputs]).mean()
+        avg_recon_loss = torch.stack([x["val_recon_loss"] for x in self.val_outputs]).mean()
+        avg_recon_loss_c = torch.stack([x["val_recon_loss_c"] for x in self.val_outputs]).mean()
+        avg_recon_loss_s = torch.stack([x["val_recon_loss_s"] for x in self.val_outputs]).mean()
+        avg_loss = torch.stack([x["val_loss"] for x in self.val_outputs]).mean()
+        rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in self.val_outputs]).mean()
+        rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in self.val_outputs]).mean()
+        rec_ratio_to_pop_mean_c = torch.stack([x["val_rec_ratio_to_pop_mean_c"] for x in self.val_outputs]).mean()
+        
 
         self.log_dict({
             "val_kld_loss": avg_kld_loss, 
@@ -267,9 +307,13 @@ class CoMA_Lightning(pl.LightningModule):
           logger=True
         )
 
+        self.val_outputs.clear()
+
+
     def on_test_epoch_start(self):
         self.model.set_mode("testing")
         
+
     def test_step(self, batch, batch_idx):
                 
         loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
@@ -284,19 +328,22 @@ class CoMA_Lightning(pl.LightningModule):
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
+
+        self.test_outputs.append(loss_dict)
         self.log_dict(loss_dict)
         return loss_dict
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
 
-        avg_kld_loss = torch.stack([x["test_kld_loss"] for x in outputs]).mean()
-        avg_recon_loss = torch.stack([x["test_recon_loss"] for x in outputs]).mean()
-        avg_recon_loss_c = torch.stack([x["test_recon_loss_c"] for x in outputs]).mean()
-        avg_recon_loss_s = torch.stack([x["test_recon_loss_s"] for x in outputs]).mean()
-        avg_loss = torch.stack([x["test_loss"] for x in outputs]).mean()
-        rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in outputs]).mean()
-        rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in outputs]).mean()
-        rec_ratio_to_pop_mean_c = torch.stack([x["test_rec_ratio_to_pop_mean_c"] for x in outputs]).mean()
+       # outputs =self.outputs
+        avg_kld_loss = torch.stack([x["test_kld_loss"] for x in self.test_outputs]).mean()
+        avg_recon_loss = torch.stack([x["test_recon_loss"] for x in self.test_outputs]).mean()
+        avg_recon_loss_c = torch.stack([x["test_recon_loss_c"] for x in self.test_outputs]).mean()
+        avg_recon_loss_s = torch.stack([x["test_recon_loss_s"] for x in self.test_outputs]).mean()
+        avg_loss = torch.stack([x["test_loss"] for x in self.test_outputs]).mean()
+        rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in self.test_outputs]).mean()
+        rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in self.test_outputs]).mean()
+        rec_ratio_to_pop_mean_c = torch.stack([x["test_rec_ratio_to_pop_mean_c"] for x in self.test_outputs]).mean()
         
         loss_dict = {
           "test_kld_loss": avg_kld_loss, 
@@ -309,7 +356,8 @@ class CoMA_Lightning(pl.LightningModule):
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
 
-        self.log_dict(loss_dict)
+        self.log_dict(loss_dict)        
+        self.test_outputs.clear()
 
         
     def predict_step(self, batch, batch_idx):

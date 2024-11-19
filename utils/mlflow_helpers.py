@@ -39,7 +39,8 @@ def get_mlflow_dataset_params(config):
 
     if d.data_type == "cardiac":
         mlflow_dataset_params = {
-          "dataset_type": "cardiac"
+          "dataset_type": "cardiac",
+          "dataset_static_representative": d.static_representative
         }
 
     elif d.data_type == "synthetic":
