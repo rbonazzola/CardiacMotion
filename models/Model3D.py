@@ -3,11 +3,49 @@ import torch
 from torch import nn
 from torch.nn import ModuleList, ModuleDict
 from .layers import ChebConv_Coma, Pool
+
 from copy import copy
 from typing import Sequence, Union, List
 from IPython import embed # left there for debugging if needed
 
 #TODO: Implement common parent class for encoder and decoder (GraphConvStack?), to capture common behaviour.
+
+class ParallelBatchNorm1d(nn.Module):
+
+    def __init__(self, num_features):
+        super(ParallelBatchNorm1d, self).__init__()
+        self.batch_norm = nn.BatchNorm1d(num_features)
+        
+    def forward(self, x):
+        # x shape: (batch_size, channels, sequence_length)
+        if len(x.size()) == 4:
+            batch_size, n_timepoints, n_vertices, n_channels = x.size()
+            
+            # Reshape to (batch_size * n_vertices, n_timepoints, n_channels)
+            # Note: We need to reshape for batch_norm1d to work on the channel dimension
+            x = x.permute(0, 2, 1, 3).contiguous().view(-1, n_timepoints * n_channels)
+            
+            # Apply batch normalization
+            x = self.batch_norm(x)
+            
+            # Reshape back to (batch_size, n_timepoints, n_vertices, n_channels)
+            x = x.view(batch_size, n_vertices, n_timepoints, n_channels).permute(0, 2, 1, 3).contiguous()
+
+        else:
+            batch_size, n_vertices, n_channels = x.size()
+            
+            # Reshape to (batch_size * n_vertices, n_timepoints, n_channels)
+            # Note: We need to reshape for batch_norm1d to work on the channel dimension
+            x = x.view(-1, n_channels)
+            
+            # Apply batch normalization
+            x = self.batch_norm(x)
+            
+            # Reshape back to (batch_size, n_timepoints, n_vertices, n_channels)
+            x = x.view(batch_size, n_vertices, n_channels).contiguous()
+
+        return x
+
 
 ################# FULL AUTOENCODER #################
 
@@ -19,7 +57,6 @@ class Autoencoder3DMesh(nn.Module):
 
         self.encoder = Encoder3DMesh(**enc_config)
         self.decoder = Decoder3DMesh(**dec_config)
-        # self.is_variational =
         
 
     def forward(self, x):
@@ -49,6 +86,7 @@ ENCODER_ARGS = [
     "downsample_matrices",
     "adjacency_matrices",
     "activation_layers"
+    # "n_timeframes"
 ]
 
 class Encoder3DMesh(nn.Module):
@@ -68,6 +106,8 @@ class Encoder3DMesh(nn.Module):
         adjacency_matrices: List[torch.Tensor],
         downsample_matrices: List[torch.Tensor],
         latent_dim: Union[None, int] = None,
+        batch_normalization = True,
+        n_timeframes = 1, 
         activation_layers="ReLU"):
 
         super(Encoder3DMesh, self).__init__()
@@ -77,7 +117,9 @@ class Encoder3DMesh(nn.Module):
         self.filters_enc = copy(num_conv_filters_enc)
         self.filters_enc.insert(0, num_features)
         self.K = cheb_polynomial_order
+        self.batch_normalization = batch_normalization
 
+        self.n_timeframes = n_timeframes
         self.matrices = {}
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
 
@@ -90,8 +132,10 @@ class Encoder3DMesh(nn.Module):
         self.latent_dim = latent_dim
 
         self.activation_layers = [activation_layers] * n_layers if isinstance(activation_layers, str) else activation_layers
+        
         self.layers = self._build_encoder()
         
+
         if self.latent_dim is not None:
             # Fully connected layers connecting the last pooling layer and the latent space layer.
             self.enc_lin_mu = torch.nn.Linear(self._n_features_before_z, self.latent_dim)
@@ -113,6 +157,8 @@ class Encoder3DMesh(nn.Module):
             encoder[layer] = ModuleDict()            
             encoder[layer]["graph_conv"] = cheb_conv_layers[i]
             encoder[layer]["pool"] = pool_layers[i]
+            if self.batch_normalization:
+                encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.n_timeframes*self.filters_enc[i+1])
             encoder[layer]["activation_function"] = activation_layers[i]
 
         return encoder
@@ -174,9 +220,7 @@ class Encoder3DMesh(nn.Module):
 
     
     def concatenate_graph_features(self, x):
-        # embed()
         x = x.reshape(x.shape[0], x.shape[1], -1)
-        # x = x.reshape(x.shape[0], self._n_features_before_z)
         return x
 
 
@@ -194,10 +238,11 @@ class Encoder3DMesh(nn.Module):
                 self.matrices["A_norm"][i] = self.matrices["A_norm"][i].to(x.device)
   
             x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
-            # try:
             x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
-            # except:
-            #    embed()
+            
+            if 'batch_normalization' in self.layers[layer]:
+                x = self.layers[layer]["batch_normalization"](x)
+            
             x = self.layers[layer]["activation_function"](x)
         
         if not preserve_graph_structure:
@@ -233,6 +278,7 @@ DECODER_ARGS = [
     "adjacency_matrices",
     "activation_layers",
     "template"
+    # "n_timeframes"
 ]
 
 class Decoder3DMesh(nn.Module):
@@ -248,6 +294,8 @@ class Decoder3DMesh(nn.Module):
         template,
         upsample_matrices: List[torch.Tensor],
         adjacency_matrices: List[torch.Tensor],
+        batch_normalization=True,
+        n_timeframes=1,
         activation_layers="ReLU"):
 
         super(Decoder3DMesh, self).__init__()
@@ -257,7 +305,9 @@ class Decoder3DMesh(nn.Module):
         self.filters_dec.insert(0, num_features)
         self.filters_dec = list(reversed(self.filters_dec))
 
+        self.n_timeframes = n_timeframes
         self.K = cheb_polynomial_order
+        self.batch_normalization = batch_normalization
 
         self.matrices = {}
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
@@ -291,6 +341,8 @@ class Decoder3DMesh(nn.Module):
             decoder[layer] = ModuleDict()
             decoder[layer]["activation_function"] = activation_layers[i]
             decoder[layer]["pool"] = pool_layers[i]
+            if self.batch_normalization:
+                decoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.n_timeframes*self.filters_dec[i])
             decoder[layer]["graph_conv"] = cheb_conv_layers[i]
 
         return decoder
@@ -359,6 +411,10 @@ class Decoder3DMesh(nn.Module):
 
             x = self.layers[layer]["activation_function"](x)
             x = self.layers[layer]["pool"](x, self.matrices["upsample"][i])
+
+            if 'batch_normalization' in self.layers[layer]:
+                x = self.layers[layer]["batch_normalization"](x)
+
             x = self.layers[layer]["graph_conv"](x, self.matrices["A_edge_index"][i], self.matrices["A_norm"][i])
 
         return x

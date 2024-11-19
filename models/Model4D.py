@@ -2,7 +2,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from models.Model3D import Encoder3DMesh, Decoder3DMesh
+# from models.Model3D import Encoder3DMesh, Decoder3DMesh
+from .Model3D import Encoder3DMesh, Decoder3DMesh
 from .PhaseModule import PhaseTensor
 from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
 
@@ -201,6 +202,7 @@ class DecoderContent(Decoder3DMesh):
         decoder_c_config = copy(decoder_c_config)
         decoder_c_config["num_conv_filters_dec"] = decoder_c_config.pop("num_conv_filters_dec_c")
         decoder_c_config["latent_dim"] = decoder_c_config.pop("latent_dim_content")
+        decoder_c_config["n_timeframes"] = 1
         
         super(DecoderContent, self).__init__(**decoder_c_config)
                  
@@ -253,7 +255,7 @@ class DecoderStyle(nn.Module):
 
 
     def forward(self, z_c, z_s, n_timeframes):
-
+        
         phased_z_s = z_s.unsqueeze(TIME_DIMENSION).repeat(1, self.n_timeframes, *[1 for x in z_s.shape[1:]])
         phased_z_s = self.phase_embedding(phased_z_s)
         s_out = [ self._process_one_timeframe(z_c, phased_z_s, t) for t in range(n_timeframes) ]
