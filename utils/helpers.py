@@ -213,7 +213,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.callbacks import RichModelSummary
 
-early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=100)
+early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=10)
 
 model_checkpoint = ModelCheckpoint(monitor='val_loss', save_top_k=1)
 
@@ -241,10 +241,12 @@ def get_lightning_trainer(trainer_args: Mapping):
     # trainer
     trainer_kwargs = {
         "callbacks": [ early_stopping, model_checkpoint, rich_model_summary, progress_bar ],
-        "gpus": trainer_args.gpus,
-        "auto_select_gpus": trainer_args.auto_select_gpus,
+        # "gpus": trainer_args.gpus,
+        "devices": trainer_args.devices,
+        "accelerator": trainer_args.accelerator,
+        # "auto_select_gpus": trainer_args.auto_select_gpus,
         "min_epochs": trainer_args.min_epochs, "max_epochs": trainer_args.max_epochs,
-        "auto_scale_batch_size": trainer_args.auto_scale_batch_size,
+        # "auto_scale_batch_size": trainer_args.auto_scale_batch_size,
         "logger": trainer_args.logger,
         "precision": trainer_args.precision,
         "overfit_batches": trainer_args.overfit_batches,
