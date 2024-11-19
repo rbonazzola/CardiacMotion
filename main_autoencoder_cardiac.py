@@ -1,47 +1,80 @@
+import os
+REPOS_ROOT = f"{os.environ['HOME']}/01_repos"
+# os.environ["CARDIAC_MOTION_REPO"] = f"{os.environ['HOME']}/01_repos/CardiacMotion"
+# repo_dir = os.environ["CARDIAC_MOTION_REPO"]
+os.chdir(REPOS_ROOT)
+import sys
+
+sys.path.append(REPOS_ROOT)
+
+from packaging import version
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
 
 import mlflow
 from mlflow.tracking import MlflowClient
 
-from tqdm import tqdm
 from IPython import embed
 import argparse
-import os, sys
-import glob
-import re
 import pickle as pkl
 from easydict import EasyDict
 import pprint
 
-import random
 import numpy as np
 from torch import Tensor
 from torch.utils.data import TensorDataset, DataLoader, random_split, SubsetRandomSampler
+
 from typing import Union, List, Optional
 
-from config.cli_args import CLI_args, overwrite_config_items
-from config.load_config import load_yaml_config, to_dict, flatten_dict, rsetattr, rgetattr
+from CardiacMotionRL.config.cli_args import CLI_args, overwrite_config_items
+from CardiacMotionRL.config.load_config import load_yaml_config, to_dict, flatten_dict, rsetattr, rgetattr
 
-from utils.helpers import *
-from utils.mlflow_helpers import get_mlflow_parameters, get_mlflow_dataset_params
+from CardiacMotionRL.utils.helpers import *
+from CardiacMotionRL.utils.mlflow_helpers import get_mlflow_parameters, get_mlflow_dataset_params
 
-os.environ["CARDIAC_MOTION_REPO"] = f"{os.environ['HOME']}/01_repos/CardiacMotion"
-repo_dir = os.environ["CARDIAC_MOTION_REPO"]
-os.chdir(repo_dir)
+from CardiacMotionRL.utils.CardioMesh.CardiacMesh import Cardiac3DMesh
 
-from data.DataModules import CardiacMeshPopulationDM, CardiacMeshPopulationDataset
-from utils.CardioMesh.CardiacMesh import Cardiac3DMesh, transform_mesh
+from CardiacMotionRL.models.Model3D import Encoder3DMesh, Decoder3DMesh
+from CardiacMotionRL.models.Model4D import DECODER_C_ARGS, DECODER_S_ARGS, ENCODER_ARGS
+from CardiacMotionRL.models.Model4D import DecoderStyle, DecoderContent, DecoderTemporalSequence 
+from CardiacMotionRL.models.Model4D import EncoderTemporalSequence, AutoencoderTemporalSequence
+from CardiacMotionRL.models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
 
-from models.Model3D import Encoder3DMesh, Decoder3DMesh
-from models.Model4D import DECODER_C_ARGS, DECODER_S_ARGS, ENCODER_ARGS
-from models.Model4D import DecoderStyle, DecoderContent, DecoderTemporalSequence 
-from models.Model4D import EncoderTemporalSequence, AutoencoderTemporalSequence
-from lightning.ComaLightningModule import CoMA_Lightning
+from CardiacMotionRL.lightning.ComaLightningModule import CoMA_Lightning
+from CardiacMotionRL.lightning.EncoderLightningModule import TemporalEncoderLightning
 
-from lightning.EncoderLightningModule import TemporalEncoderLightning
-from models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
+from CardiacMotionRL.data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
 
+from pytorch_lightning.profilers import SimpleProfiler, AdvancedProfiler
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import RichProgressBar
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
+from pytorch_lightning.callbacks import ModelSummary
+import logging
+
+profiler = SimpleProfiler(filename='simple_profiler_output.txt')
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger()
+
+
+class Repos:
+    
+    import os    
+    CARDIAC_MOTION = f"{os.environ['HOME']}/01_repos/CardiacMotionRL"
+    GWAS = f"{os.environ['HOME']}/01_repos/GWAS_pipeline/"
+    CARDIAC = f"{os.environ['HOME']}/01_repos/CardiacCOMA/"
+    CARDIOMESH = f"{os.environ['HOME']}/01_repos/CardioMesh/"
+
+    
 partitions = {
   "left_atrium" : ("LA", "MVP", "PV1", "PV2", "PV3", "PV4", "PV5"),
   "right_atrium" : ("RA", "TVP", "PV6", "PV7"),
@@ -50,6 +83,7 @@ partitions = {
   "biventricle" : ("LV", "AVP", "MVP", "RV", "PVP", "TVP"),
   "aorta" : ("aorta",)
 }
+
 
 # SYNTHETIC DATASET
 # config.dataset.parameters.N = 5120   
@@ -90,7 +124,7 @@ def mlflow_startup(mlflow_config):
         "run_id": trainer.logger.run_id,
         "experiment_id": exp_id,
         "run_name": mlflow_config.run_name,
-        #"tags": config.additional_mlflow_tags
+        # "tags": config.additional_mlflow_tags
     }
     
     mlflow.start_run(**run_info)
@@ -191,6 +225,31 @@ def get_coma_matrices(config, template, partition, from_cached=True, cache=True)
         "template": template
     }
 
+class MemoryUsageCallback(pl.Callback):
+    def on_epoch_end(self, trainer, pl_module):
+        print(f'Memory allocated: {torch.cuda.memory_allocated()} bytes')
+        print(f'Memory cached: {torch.cuda.memory_reserved()} bytes')
+
+
+
+class ModelCheckpointWithThreshold(ModelCheckpoint):
+
+    def __init__(self, monitor, threshold, mode='min', *args, **kwargs):
+        super().__init__(monitor=monitor, mode=mode, *args, **kwargs)
+        self.threshold = threshold
+
+    def _should_save_checkpoint(self, trainer):
+        
+        current = trainer.callback_metrics.get(self.monitor)
+        
+        if current is None:
+            return False
+        
+        if self.mode == 'min':
+            return current < self.threshold
+        else:
+            return current > self.threshold
+
 
 ###
 def main(model, datamodule, trainer, mlflow_config=None):
@@ -203,7 +262,8 @@ def main(model, datamodule, trainer, mlflow_config=None):
       Example:
       
     '''
-            
+    print(mlflow_config)
+
     if mlflow_config:
         mlflow_config.run_id = trainer.logger.run_id
         mlflow_startup(mlflow_config)             
@@ -217,6 +277,35 @@ def main(model, datamodule, trainer, mlflow_config=None):
 
 ##########################################################################################
     
+def add_trainer_args(parser):
+    
+    from packaging import version
+    parser_trainer_group = parser.add_argument_group("trainer")
+    
+    trainer_args = ["max_epochs", "min_epochs", "precision", "logger", "overfit_batches", "limit_test_batches"]
+
+    parser_trainer_group.add_argument("--max_epochs", "--max-epochs", type=int, default=100, help="Number of epochs to train the model.")
+    parser_trainer_group.add_argument("--min_epochs", "--min-epochs", type=int, default=1, help="Minimum number of epochs to train the model.")
+    
+    if version.parse(pl.__version__) < version.parse("2.0.0"):
+        parser_trainer_group.add_argument("--gpus", type=int, default=1, help="Number of GPUs to use for training.")
+        parser_trainer_group.add_argument("--auto_select_gpus", action='store_true', help="If enabled, auto select available GPUs.")
+        parser_trainer_group.add_argument("--auto_scale_batch_size", action='store_true', help="If enabled, automatically scale the batch size.")
+        trainer_args.extend(["gpus", "auto_select_gpus", "auto_scale_batch_size"])
+    else:
+        parser_trainer_group.add_argument("--devices", type=int, default=1, help="Number of devices (GPUs/TPUs) to use for training.")
+        parser_trainer_group.add_argument("--accelerator", type=str, default='gpu', help="Accelerator type to use for training (e.g., 'cpu', 'gpu').")
+        trainer_args.extend(["devices", "accelerator"])
+    
+    parser_trainer_group.add_argument("--precision", type=int, choices=[16, 32], default=32, help="Precision to use during training.")
+    parser_trainer_group.add_argument("--logger", type=str, help="Logger for experiment tracking.")
+    parser_trainer_group.add_argument("--overfit_batches", type=float, default=0.0, help="Percent of training set to overfit on.")
+    parser_trainer_group.add_argument("--limit_test_batches", type=float, default=1.0, help="How much of the test set to use.")
+    parser_trainer_group.add_argument("--patience", type=int, default=10, help="Patience for training")
+
+    return trainer_args
+
+
     
 if __name__ == "__main__":
 
@@ -232,12 +321,14 @@ if __name__ == "__main__":
         my_args.add_argument(*k, **v)
         
     my_args.add_argument("--partition", type=str, default="left_ventricle")
+    my_args.add_argument("--n_timeframes", type=int, default=50)
+    my_args.add_argument("--static_representative", type=str, default="end_diastole", help="Currently, only \"end_diastole\" and \"temporal_mean\" are supported.")    
         
     # adding arguments specific to the PyTorch Lightning trainer.
-    parser = pl.Trainer.add_argparse_args(parser)
-
+    trainer_args = add_trainer_args(parser)    
     args = parser.parse_args()
 
+    
     ### Load configuration
     if not os.path.exists(args.yaml_config_file):
         logger.error("Config not found: " + args.yaml_config_file)
@@ -253,15 +344,15 @@ if __name__ == "__main__":
         pass
 
     # https://stackoverflow.com/questions/38884513/python-argparse-how-can-i-get-namespace-objects-for-argument-groups-separately
-    arg_groups = {}
-    
+    arg_groups = {}    
     for group in parser._action_groups:
+        # print(group.title)
+        # print(group._group_actions)
         group_dict = { a.dest: rgetattr(args, a.dest, None) for a in group._group_actions }
         arg_groups[group.title] = EasyDict(group_dict)
     
-    trainer_args = arg_groups["pl.Trainer"]
-        
-    # config.log_computational_graph = args.log_computational_graph
+    trainer_args = arg_groups["trainer"]
+            
     if args.disable_mlflow_logging:
         config.mlflow = None
 
@@ -288,27 +379,29 @@ if __name__ == "__main__":
         trainer_args.logger = None
 
     PARTITION = args.partition
-    FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
-    MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{PARTITION}.npy"
-    PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{PARTITION}.pkl"    
-    SUBSETTING_MATRIX_FILE = f"/home/user/01_repos/CardioMesh/data/cached/subsetting_matrix_{PARTITION}.pkl" 
-    MESHES_PATH = "data/cardio/Results"
+    FACES_FILE = "CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
+    MEAN_ACROSS_CYCLE_FILE = f"CardioMesh/data/cached/mean_shape_time_avg__{PARTITION}.npy"
+    PROCRUSTES_FILE = f"CardioMesh/data/cached/procrustes_transforms_{PARTITION}.pkl"    
+    SUBSETTING_MATRIX_FILE = f"CardioMesh/data/cached/subsetting_matrix_{PARTITION}.pkl" 
+    MESHES_PATH = "CardiacMotionRL/data/datasets/meshes"
     
     subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
     
     ID = "1000511"
     fhm_mesh = Cardiac3DMesh(
-       filename=f"/mnt/data/workshop/workshop-user1/datasets/meshes/Results_Yan/{ID}/models/FHM_res_0.1_time001.npy",
-       faces_filename="/home/user/01_repos/CardioMesh/data/faces_fhm_10pct_decimation.csv",
-       subpart_id_filename="/home/user/01_repos/CardioMesh/data/subpartIDs_FHM_10pct.txt"
+       filename=f"{os.environ['HOME']}/01_repos/CardiacMotionRL/data/datasets/meshes/{ID}/models/FHM_res_0.1_time001.npy",
+       faces_filename="CardioMesh/data/faces_fhm_10pct_decimation.csv",
+       subpart_id_filename="CardioMesh/data/subpartIDs_FHM_10pct.txt"
     )
     mean_shape = np.load(MEAN_ACROSS_CYCLE_FILE)
     faces = fhm_mesh[partitions[PARTITION]].f
     template = EasyDict({ "v": mean_shape, "f": faces })
     
     N_subj = 10000
-    NT = 10
-    PHASES = 1+(50/NT)*np.array(range(NT)) # 1, 6, 11, 16, 21...
+
+    NT = args.n_timeframes
+    PHASES = 1+(50/NT)*np.array(range(NT)) # e.g. 1, 6, 11, 16, 21... if NT == 10
+
     cardiac_dataset = CardiacMeshPopulationDataset(
         root_path=MESHES_PATH, 
         procrustes_transforms=PROCRUSTES_FILE,
@@ -319,21 +412,19 @@ if __name__ == "__main__":
         phases_filter=PHASES
     )
     
-    mesh_dm = CardiacMeshPopulationDM(cardiac_dataset, batch_size=8)        
+    mesh_dm = CardiacMeshPopulationDM(cardiac_dataset, batch_size=args.config.batch_size)        
    
     mesh_dm.setup()
     x = EasyDict(next(iter(mesh_dm.train_dataloader())))
     
     mesh_template = mesh_dm.dataset.template_mesh
-    
-    config.network_architecture.latent_dim_c = 16 
-    config.network_architecture.latent_dim_s = 16
+            
     coma_args = get_coma_args(config)
     coma_matrices = get_coma_matrices(config, mesh_template, PARTITION)
     coma_args.update(coma_matrices)
   
     enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
-    encoder = Encoder3DMesh(**enc_config)
+    encoder = Encoder3DMesh(**enc_config, n_timeframes=NT)
 
     enc_config.latent_dim = config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s 
 
@@ -345,7 +436,7 @@ if __name__ == "__main__":
     decoder_config_c = EasyDict({ k:v for k,v in coma_args.items() if k in DECODER_C_ARGS })
     decoder_config_s = EasyDict({ k:v for k,v in coma_args.items() if k in DECODER_S_ARGS })
     decoder_content = DecoderContent(decoder_config_c)
-    decoder_style = DecoderStyle(decoder_config_s, phase_embedding_method="exp_v1")
+    decoder_style = DecoderStyle(decoder_config_s, phase_embedding_method="exp_v1", n_timeframes=NT)
     t_decoder = DecoderTemporalSequence(decoder_content, decoder_style, is_variational=coma_args.is_variational)
         
     t_ae = AutoencoderTemporalSequence(encoder=t_encoder, decoder=t_decoder, is_variational=coma_args.is_variational)
@@ -358,7 +449,40 @@ if __name__ == "__main__":
         mesh_template=mesh_template
     )
 
-    trainer = get_lightning_trainer(trainer_args)
+    early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=trainer_args.patience)
+    custom_checkpoint_callback = ModelCheckpointWithThreshold(monitor='val_recon_loss', threshold=3 , save_top_k=1)
+    model_summary = ModelSummary(max_depth=-1)
+
+    progress_bar = RichProgressBar(
+        theme=RichProgressBarTheme(
+        description="green_yellow",
+        progress_bar="green1",
+        progress_bar_finished="green1",
+        progress_bar_pulse="#6206E0",
+        batch_progress="green_yellow",
+        time="grey82",
+        processing_speed="grey82",
+        metrics="grey82",
+      )
+    )
+
+    trainer_kwargs = {
+        "callbacks": [ early_stopping, model_checkpoint, rich_model_summary, progress_bar, MemoryUsageCallback() ],
+        "devices": trainer_args.devices,
+        "accelerator": trainer_args.accelerator,        
+        "min_epochs": trainer_args.min_epochs, "max_epochs": trainer_args.max_epochs,
+        # "gpus": trainer_args.gpus,
+        # "auto_select_gpus": trainer_args.auto_select_gpus,
+        # "auto_scale_batch_size": trainer_args.auto_scale_batch_size,
+        "logger": trainer_args.logger,
+        "precision": trainer_args.precision,
+        "overfit_batches": trainer_args.overfit_batches,
+        "limit_test_batches": trainer_args.limit_test_batches
+    }
+
+    # trainer_kwargs["profiler"] = profiler
+    
+    trainer = pl.Trainer(**trainer_kwargs)
 
     if args.show_config or args.dry_run:
         pp = pprint.PrettyPrinter(indent=2, compact=True)
