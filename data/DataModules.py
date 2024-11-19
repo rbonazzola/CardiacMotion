@@ -2,23 +2,20 @@ import torch
 import os, sys
 import numpy as np
 import re
-from tqdm import tqdm
 import glob
-# print(sys.path)
 from utils.CardioMesh.CardiacMesh import CardiacMeshPopulation, Cardiac3DMesh
 from torch.utils.data import TensorDataset, DataLoader, random_split
-from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import * # Any, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from copy import copy
 import pickle as pkl
 import pytorch_lightning as pl
-import logging
-from argparse import Namespace
 
 from utils.CardioMesh.CardiacMesh import transform_mesh
 from torch import Tensor
 
 from easydict import EasyDict
+
 
 def mse(s1, s2):
     return ((s1-s2)**2).sum(-1).mean(-1)
@@ -29,12 +26,13 @@ class CardiacMeshPopulationDataset(TensorDataset):
     def __init__(
         self, 
         root_path: str, 
-        faces: Union[np.array, str],
+        faces: Union[np.ndarray, str],
         N_subj: Union[int, None] = None,
         procrustes_transforms: Union[str, None] = None,
-        subsetting_matrix: Union[np.array, None] = None,
+        subsetting_matrix: Union[np.ndarray, None] = None,        
         template_mesh = None,
-        phases_filter = None
+        phases_filter = None,
+        static_shape: Literal["end_diastole", "temporal_mean", "end_systole"] = "end_diastole"
         ):
         
         '''
@@ -57,6 +55,7 @@ class CardiacMeshPopulationDataset(TensorDataset):
         self.subsetting_matrix = subsetting_matrix
         self.faces = faces
         self.template_mesh = template_mesh
+        self.static_shape = static_shape
         
     
     def _get_paths(self, N=None, phases_filter=None):
@@ -70,7 +69,7 @@ class CardiacMeshPopulationDataset(TensorDataset):
         
         dd = {}
         
-        for id in tqdm(ids):
+        for id in ids:
             
             # paths = sorted(glob.glob(f"{self._root_path}/{id}/models/LV*.npy"))    
             paths = sorted(glob.glob(f"{self._root_path}/{id}/models/FHM*.npy"))    
@@ -87,10 +86,10 @@ class CardiacMeshPopulationDataset(TensorDataset):
                         paths_filtered.append(path)
                         
             phases = [ int(phase) for phase in phases ]
-            
+                        
             if ((phases_filter is None) and len(phases) == 50) or ((phases_filter is not None) and len(phases) == len(phases_filter)):
                 dd[id] = paths_filtered
-        
+            
         return dd            
        
         
@@ -107,15 +106,27 @@ class CardiacMeshPopulationDataset(TensorDataset):
         
         s_t = []
         for p in self._paths[id]:
-            s = np.load(p, allow_pickle=True)
+            
+            try:
+                s = np.load(p, allow_pickle=True)
+            except ValueError as e:
+                
+                continue
+            
             if self.subsetting_matrix is not None:
                 s = self.subsetting_matrix * s
+
             s = transform_mesh(s, **procrustes_transforms) 
             s_t.append(s)
               
         s_t = Tensor(np.array(s_t))
         
-        s_t_avg = s_t.mean(axis=0)
+        if self.static_shape == "end_diastole":
+            s_t_avg = s_t[0]
+        elif self.static_shape == "temporal_mean":
+            s_t_avg = s_t.mean(axis=0)
+        else:
+            raise NotImplemented
         
         dev_from_tmp_avg = np.array([ mse(s_t[j], s_t_avg) for j, _ in enumerate(s_t) ])
         dev_from_tmp_avg = Tensor(dev_from_tmp_avg)
@@ -151,7 +162,7 @@ class CardiacMeshPopulationDM(pl.LightningDataModule):
         dataset: TensorDataset,
         batch_size: int = 16,
         split_lengths: Union[None, List[int]]=None,
-        num_workers=1
+        num_workers=3
     ):
     
         '''
