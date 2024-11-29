@@ -1,7 +1,8 @@
 {
   data_type: "cardiac",
-  parameters: {    
-    "phases": 1,
+  static_representative: "end_diastole",
+  parameters: {        
+    "T": 50,
   },
   preprocessing: {
     "procrustes_scaling": true
