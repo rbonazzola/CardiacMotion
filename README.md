@@ -23,6 +23,7 @@ The last line will clone the Git submodules that this repository depends on, whi
 ## Running the training script
 Example command to perform network training and evaluation:
 
+For synthetic data:
 ```
 N_CHANNELS="128 128 128 128"
 
@@ -45,4 +46,25 @@ python main.py \
   --dataset.freq_max 2 \
   --dataset.l_max 1 \
   --gpus ${GPU_DEVICE:-0}
+```
+
+For cardiac data:
+```
+python main_autoencoder_cardiac.py \
+  -c ${HOME}/01_repos/CardiacMotionRL/config_files/config_folded_c_and_s.yaml \
+  --mlflow_experiment \"${EXPNAME:=Biventricle}\" \
+  --learning_rate ${LR:=1e-4} \
+  --precision ${PRECISION:=32} \
+  --batch_size ${BATCH_SIZE:=8} \
+  --partition ${PARTITION:=biventricle} \
+  --n_timeframes ${NTIMEFRAMES:=50} \
+  --polynomial_degree ${POLYDEGREE:="6 6 6 6"} \
+  --reduction_factors ${RED_FACTORS:="3 3 4 4"} \
+  --n_channels ${NCHANNELS:="32 32 32 32"} \
+  --latent_dim_c ${LATENTDIM_C:=8} \
+  --latent_dim_s ${LATENTDIM_S:=8} \
+  --w_kl ${WKL:=1e-3} \
+  --patience ${PATIENCE:=3} \
+  --max-epochs 10000 \
+  --static_representative end_diastole
 ```
