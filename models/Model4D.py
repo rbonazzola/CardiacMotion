@@ -1,20 +1,18 @@
-import numpy as np
 import torch
 from torch import nn
 
-# from models.Model3D import Encoder3DMesh, Decoder3DMesh
-from .Model3D import Encoder3DMesh, Decoder3DMesh
-from .PhaseModule import PhaseTensor
-from .TemporalAggregators import Mean_Aggregator, DFT_Aggregator, FCN_Aggregator
-
 from typing import Sequence, Union, List, Literal
-from copy import copy
-from IPython import embed
-
 from copy import copy, deepcopy
-
 import logging
 
+from .Model3D import Encoder3DMesh, Decoder3DMesh
+from .PhaseModule import PhaseTensor
+
+from .TemporalAggregators import (
+  Mean_Aggregator, 
+  DFT_Aggregator, 
+  FCN_Aggregator
+)
 
 logging.basicConfig(
   level=logging.INFO, 
