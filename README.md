@@ -51,7 +51,7 @@ python main.py \
 For cardiac data:
 ```
 python main_autoencoder_cardiac.py \
-  -c ${HOME}/01_repos/CardiacMotionRL/config_files/config_folded_c_and_s.yaml \
+  -c ./config_files/config_folded_c_and_s.yaml \
   --mlflow_experiment \"${EXPNAME:=Biventricle}\" \
   --learning_rate ${LR:=1e-4} \
   --precision ${PRECISION:=32} \
