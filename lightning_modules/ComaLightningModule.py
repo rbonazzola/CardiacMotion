@@ -7,7 +7,7 @@ import imageio
 import numpy as np
 
 from argparse import Namespace
-from IPython import embed # uncomment for debugging
+
 from models.Model4D import AutoencoderTemporalSequence
 from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
