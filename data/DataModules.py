@@ -1,21 +1,24 @@
-import torch
 import os, sys
 import numpy as np
 import re
 import glob
-from utils.CardioMesh.CardiacMesh import CardiacMeshPopulation, Cardiac3DMesh
-from torch.utils.data import TensorDataset, DataLoader, random_split
-from typing import * # Any, List, Literal, Mapping, Optional, Sequence, Tuple, Union
-
-from copy import copy
 import pickle as pkl
+from easydict import EasyDict
+from typing import Optional, List, Union, Literal
+from copy import copy
+
+import torch
+from torch import Tensor
+from torch.utils.data import DataLoader, random_split, TensorDataset
+
 import pytorch_lightning as pl
 
-from utils.CardioMesh.CardiacMesh import transform_mesh
-from torch import Tensor
+from cardio_mesh import (
+    CardiacMeshPopulation, 
+    Cardiac3DMesh,    
+)
 
-from easydict import EasyDict
-
+from cardio_mesh.procrustes import transform_mesh
 
 def mse(s1, s2):
     return ((s1-s2)**2).sum(-1).mean(-1)
@@ -240,3 +243,114 @@ class CardiacMeshPopulationDM(pl.LightningDataModule):
     def test_dataloader(self):
         # return DataLoader(self.train_dataset, sampler=SubsetRandomSampler(self.test_indices), batch_size=self.batch_size, num_workers=self.num_workers)
         return DataLoader(self.test_dataset, batch_size=1, num_workers=self.num_workers)
+
+
+class GenericDataModule(pl.LightningDataModule):
+    """
+    A generic PyTorch Lightning DataModule for handling datasets.
+
+    Args:
+        dataset: A PyTorch dataset (e.g., TensorDataset).
+        batch_size: Batch size for dataloaders.
+        split_lengths: A list of lengths or fractions for splitting the dataset into train, val, and test sets.
+                      If None, defaults to [0.6, 0.2, 0.2].
+        num_workers: Number of workers for dataloaders.
+        shuffle_train: Whether to shuffle the training dataloader.
+        shuffle_val: Whether to shuffle the validation dataloader.
+        shuffle_test: Whether to shuffle the test dataloader.
+    """
+
+    def __init__(
+        self,
+        dataset: TensorDataset,
+        batch_size: int = 16,
+        split_lengths: Optional[Union[List[int], List[float]]] = None,
+        num_workers: int = 3,
+        shuffle_train: bool = True,
+        shuffle_val: bool = False,
+        shuffle_test: bool = False,
+    ):
+        super().__init__()
+
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.split_lengths = self._get_split_lengths(split_lengths)
+        self.num_workers = num_workers
+        self.shuffle_train = shuffle_train
+        self.shuffle_val = shuffle_val
+        self.shuffle_test = shuffle_test
+
+    def _get_split_lengths(self, split_lengths: Optional[Union[List[int], List[float]]]) -> List[int]:
+        """
+        Validates and computes the lengths for splitting the dataset.
+
+        Args:
+            split_lengths: A list of lengths or fractions for splitting the dataset.
+
+        Returns:
+            A list of integers representing the lengths of the train, val, and test sets.
+        """
+        if split_lengths is None:
+            # Default split: 60% train, 20% val, 20% test
+            train_len = int(0.6 * len(self.dataset))
+            test_len = int(0.2 * len(self.dataset))
+            val_len = len(self.dataset) - train_len - test_len
+            return [train_len, val_len, test_len]
+
+        if all(isinstance(l, int) for l in split_lengths):
+            # If lengths are provided as integers
+            if len(split_lengths) != 3:
+                raise ValueError("split_lengths must have exactly 3 elements for train, val, and test sets.")
+            return split_lengths
+
+        if all(isinstance(l, float) for l in split_lengths):
+            # If lengths are provided as fractions
+            if len(split_lengths) not in [2, 3]:
+                raise ValueError("split_lengths must have 2 or 3 elements when using fractions.")
+            train_len = int(split_lengths[0] * len(self.dataset))
+            test_len = int(split_lengths[1] * len(self.dataset))
+            val_len = len(self.dataset) - train_len - test_len if len(split_lengths) == 2 else int(split_lengths[2] * len(self.dataset))
+            return [train_len, val_len, test_len]
+
+        raise ValueError("split_lengths must be a list of integers or floats.")
+
+    def setup(self, stage: Optional[str] = None):
+        """
+        Splits the dataset into train, val, and test sets.
+        """
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
+            self.dataset, self.split_lengths
+        )
+
+    def train_dataloader(self) -> DataLoader:
+        """
+        Returns the training dataloader.
+        """
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=self.shuffle_train,
+            num_workers=self.num_workers,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        """
+        Returns the validation dataloader.
+        """
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=self.shuffle_val,
+            num_workers=self.num_workers,
+        )
+
+    def test_dataloader(self) -> DataLoader:
+        """
+        Returns the test dataloader.
+        """
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            shuffle=self.shuffle_test,
+            num_workers=self.num_workers,
+        )
