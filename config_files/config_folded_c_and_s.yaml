@@ -5,4 +5,4 @@ sample_sizes: [0.6, 0.2, 0.2]
 network_architecture: "network_architecture/default_c_and_s.yaml"
 loss: "loss/default.yaml"
 optimizer: "optimizer/default_adam.yaml"
-mlflow: "mlflow/default_local2.yaml"
+mlflow: "mlflow/default_local.yaml"
