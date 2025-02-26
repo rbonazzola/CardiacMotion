@@ -217,7 +217,7 @@ CLI_args = {
     ** training_args,
     ** dataset_args,
     ** mlflow_args,
-    ("--show_config",): {
+    ("--show_config", "show-config"): {
         "default": False,
         "action": "store_true",
         "help": "Display run's configuration"
