@@ -6,7 +6,6 @@ import pyvista as pv
 
 from tqdm import tqdm
 
-# subj_idx_w = widgets.IntSlider(min=1, max=len(cardiac_dataset))
 
 def generate_gif(mesh4D, faces, filename, camera_position='xy', show_edges=False, **kwargs):
         

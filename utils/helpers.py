@@ -1,6 +1,6 @@
 import torch
 import os
-import sys; # sys.path.append("..")
+import sys;
 
 import pytorch_lightning as pl
 
@@ -53,12 +53,8 @@ def get_datamodule(dataset_params: Mapping, batch_size: Union[int, Sequence[int]
     return data_module
 
 
-def get_coma_matrices(
-      downsample_factors: Sequence[int],
-      template, 
-      cache:bool=True, 
-      from_cached:bool=True
-    ):
+def get_coma_matrices(config, template, partition, from_cached=True, cache=True):
+    
     
     '''
     :param downsample_factors: list of downsampling factors, e.g. [2, 2, 2, 2]
@@ -70,16 +66,20 @@ def get_coma_matrices(
     '''
 
     # mesh_popu = dm.train_dataset.dataset.mesh_popu
-    
-    matrices_hash = hash(
-        (hash(template), tuple(downsample_factors))) % 1000000
-    
+    downsample_factors = config.network_architecture.pooling.parameters.downsampling_factors
+
+    matrices_hash = hash((
+        hash("1000215"), 
+        hash(tuple(downsample_factors)), 
+        hash(partition)
+    )) % 1000000
+
     cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
 
     if from_cached and os.path.exists(cached_file):
         A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
     else:
-        template_mesh = Mesh(template.vertices, template.faces)
+        template_mesh = Mesh(template.v, template.f)
         M, A, D, U = mesh_operations.generate_transform_matrices(
             template_mesh, downsample_factors,
         )
@@ -95,11 +95,11 @@ def get_coma_matrices(
         "upsample_matrices": U_t,
         "adjacency_matrices": A_t,
         "n_nodes": n_nodes,
-        "template": template_mesh
+        "template": template
     }
 
 
-def get_coma_args(config: Mapping, mesh_dataset: torch.utils.data.Dataset):
+def get_coma_args(config: Mapping): #, mesh_dataset: torch.utils.data.Dataset):
     
     '''
       Arguments:
@@ -128,12 +128,12 @@ def get_coma_args(config: Mapping, mesh_dataset: torch.utils.data.Dataset):
 
     downsample_factors = config.network_architecture.pooling.parameters.downsampling_factors
     
-    matrices = get_coma_matrices(
-        downsample_factors,                 
-        mesh_dataset.mesh_popu.template,         
-        from_cached=False
-    )
-    coma_args.update(matrices)
+    # matrices = get_coma_matrices(
+    #     downsample_factors,                 
+    #     mesh_dataset.mesh_popu.template,         
+    #     from_cached=False
+    # )
+    # coma_args.update(matrices)
 
     return EasyDict(coma_args)
 
