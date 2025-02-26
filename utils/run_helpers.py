@@ -1,8 +1,4 @@
 import os, sys
-CARDIAC_MOTION = f"{os.environ['HOME']}/01_repos/CardiacMotionRL"
-sys.path.append(CARDIAC_MOTION)
-sys.path.append(f"{CARDIAC_MOTION}/utils")
-
 import mlflow
 from mlflow.tracking import MlflowClient
 
@@ -29,7 +25,9 @@ import ipywidgets as widgets
 from ipywidgets import interact
 
 from data.DataModules import CardiacMeshPopulationDM, CardiacMeshPopulationDataset
-from utils.CardioMesh.CardiacMesh import Cardiac3DMesh, transform_mesh
+from cardio_mesh import Cardiac3DMesh
+from cardio_mesh.procrustes import transform_mesh
+
 from utils.image_helpers import generate_gif, merge_gifs_horizontally
 
 from main_autoencoder_cardiac import *
@@ -55,7 +53,6 @@ if len(runs_df) == 0:
 
 runs_df = runs_df[runs_df["metrics.val_recon_loss_c"] < 3]
 runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
-# print(runs_df)
 
 runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/rodrigo/CISTIB/repos/", "/mnt/data/workshop/workshop-user1/output/"))
 runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/home01/scrb/01_repos/", "/mnt/data/workshop/workshop-user1/output/"))    
