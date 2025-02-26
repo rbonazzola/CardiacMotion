@@ -1,4 +1,4 @@
-import os
+import os, sys
 import yaml
 import functools
 from argparse import Namespace
@@ -30,11 +30,7 @@ def is_yaml_file(x):
 
 
 def get_repo_rootdir():
-    import shlex
-    from subprocess import check_output
-    # repo_rootdir = f"{os.environ['HOME']}/Rodrigo_repos/CardiacMotion" #check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
-    repo_rootdir = f"{os.environ['HOME']}/01_repos/CardiacMotionRL" #check_output(shlex.split("git rev-parse --show-toplevel")).strip().decode('ascii')
-    return repo_rootdir
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
 def unfold_config(token, no_unfolding_for=[]):
