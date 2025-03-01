@@ -1,0 +1,20 @@
+root_folder: string
+seed: {null|int}
+
+sample_sizes: {
+  training: int|float"%"
+  validation: int|float"%"
+  testing: {null|int|float"%"}
+}
+
+network_architecture: {
+  graph_convolution: string {"chebyshev"|"spiral"}
+  parameters_convolution: dict
+  pooling: string {"cuadric"}
+  parameters_pooling: dict
+}
+
+optimizer: {
+  algorithm: {["adam"]|"sgd"}
+  parameters: {}
+}

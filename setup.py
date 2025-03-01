@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-  name="cardiac-motion-rl",
+  name="cardiac-motion",
   version="0.0.1",
   author="Rodrigo Bonazzola (rbonazzola)",
   author_email="rodbonazzola@gmail.com",
