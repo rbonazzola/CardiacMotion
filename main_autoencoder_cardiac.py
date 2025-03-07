@@ -33,7 +33,8 @@ from config.cli_args import (
 
 from config.load_config import (
     load_yaml_config, 
-    rgetattr
+    rgetattr,
+    to_dict
 )
 
 from lightning_modules.ComaLightningModule import CoMA_Lightning
@@ -60,14 +61,16 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.profilers import SimpleProfiler
 profiler = SimpleProfiler(filename='simple_profiler_output.txt')
 
-import logging
+from cardiac_motion import logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()])
-
-logger = logging.getLogger()
+# import logging
+# 
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format="%(asctime)s [%(levelname)s] %(message)s",
+#     handlers=[logging.StreamHandler()])
+# 
+# logger = logging.getLogger()
 
 ################################################################################################
 
@@ -91,6 +94,7 @@ def mlflow_startup(mlflow_config):
         experiment = mlflow.get_experiment_by_name(mlflow_config.experiment_name)
         print(experiment)
         exp_id = experiment.experiment_id
+
     run_info = {
         "run_id": trainer.logger.run_id,
         "experiment_id": exp_id,
@@ -149,8 +153,9 @@ class ModelCheckpointWithThreshold(ModelCheckpoint):
 ##########################################################################################
 
 def get_n_equispaced_timeframes(n_timeframes):
-        assert n_timeframes in {2, 5, 10, 25, 50}, f"Number of timeframes (args.n_timeframes) is {args.n_timeframes} which does not divide 50."
-        phases = 1 + (50 / n_timeframes) * np.array(range(n_timeframes))    
+    
+    assert n_timeframes in {2, 5, 10, 25, 50}, f"Number of timeframes (args.n_timeframes) is {args.n_timeframes} which does not divide 50."
+    phases = 1 + (50 / n_timeframes) * np.array(range(n_timeframes))    
 
 
 def add_trainer_args(parser):
@@ -217,6 +222,7 @@ if __name__ == "__main__":
     for k, v in CLI_args.items():
         my_args.add_argument(*k, **v)
     
+    my_args.add_argument("--n_subjects", type=int, default=1000)
     my_args.add_argument("--partition", type=str, default="left_ventricle")
     my_args.add_argument("--n_timeframes", type=int, default=50)
     my_args.add_argument("--use-closed-chambers", default=True, action='store_true')
@@ -241,7 +247,6 @@ if __name__ == "__main__":
     except AttributeError:
         # If there are no elements to replace
         config = ref_config
-        pass
 
     # https://stackoverflow.com/questions/38884513/python-argparse-how-can-i-get-namespace-objects-for-argument-groups-separately
     arg_groups = {}    
@@ -252,7 +257,6 @@ if __name__ == "__main__":
         arg_groups[group.title] = EasyDict(group_dict)
     
     trainer_args = arg_groups["trainer"]
-
 
     # --------------------------
     # 3. MLflow Configuration
@@ -295,41 +299,18 @@ if __name__ == "__main__":
         faces=(faces := template_fhm_mesh[closed_chamber].f),
         subsetting_matrix=subsetting_matrix,
         template_mesh=(mesh_template := EasyDict({"v": mean_shape, "f": faces})),
-        N_subj=(N_subj := 10000),
+        N_subj=(N_subj := args.n_subjects),
         phases_filter=get_n_equispaced_timeframes(args.n_timeframes)
     )
-    
-    (mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size)).setup()
+
+    ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size) ).setup()
 
     # --------------------------
     # 5. Define Model
     # --------------------------
     
-    coma_matrices = get_coma_matrices(config, mesh_dm.dataset.template_mesh, partition)
-    (coma_args := get_coma_args(config)).update(coma_matrices)
-  
-    enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
-    encoder = Encoder3DMesh(**enc_config, n_timeframes=args.n_timeframes)
-    
-    enc_config.latent_dim = config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s 
-    h = encoder.forward_conv_stack(next(iter(mesh_dm.train_dataloader())).s_t, preserve_graph_structure=False)
-    
-    z_aggr    = FCN_Aggregator(features_in=args.n_timeframes * h.shape[-1], features_out=enc_config.latent_dim)
-    t_encoder = EncoderTemporalSequence(encoder3d=encoder, z_aggr_function=z_aggr, is_variational=coma_args.is_variational)   
-    
-    decoder_content = DecoderContent({k: v for k, v in coma_args.items() if k in DECODER_C_ARGS})
-    decoder_style   = DecoderStyle({k: v for k, v in coma_args.items() if k in DECODER_S_ARGS}, phase_embedding_method="exp_v1", n_timeframes=args.n_timeframes)
-    t_decoder       = DecoderTemporalSequence(decoder_content, decoder_style, is_variational=coma_args.is_variational)
-    
-    t_ae = AutoencoderTemporalSequence(encoder=t_encoder, decoder=t_decoder, is_variational=coma_args.is_variational)
-    
-    lit_module = CoMA_Lightning(
-        model=t_ae, 
-        loss_params=config.loss, 
-        optimizer_params=config.optimizer,
-        additional_params=config,
-        mesh_template=mesh_template
-    )
+    model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
+    lit_module = CoMA_Lightning(model=model, loss_params=config.loss, optimizer_params=config.optimizer, additional_params=config, mesh_template=mesh_template)
 
     # --------------------------
     # 6. Configure Trainer and Run
@@ -339,10 +320,18 @@ if __name__ == "__main__":
         model_checkpoint, 
         rich_model_summary,
         progress_bar, 
-        MemoryUsageCallback() 
+        # MemoryUsageCallback() 
     ]
-    # callbacks = [ EarlyStopping(monitor="val_loss", mode="min", patience=trainer_args.patience) ]
-    (trainer_kwargs := dict(callbacks=callbacks)).update({ k: getattr(trainer_args, k) for k in ["devices", "accelerator", "min_epochs", "max_epochs", "logger", "precision"] })
+
+    (( trainer_kwargs := dict(callbacks=callbacks) )
+        .update({ k: getattr(trainer_args, k) for k in ["devices", "accelerator", "min_epochs", "max_epochs", "logger", "precision"] } ))
     
     trainer = pl.Trainer(**trainer_kwargs)
+
+    if args.show_config or args.dry_run:
+        pp = pprint.PrettyPrinter(indent=2, compact=True)
+        pp.pprint(to_dict(config))
+        if args.dry_run:
+            exit()
+
     main(lit_module, mesh_dm, trainer, config.mlflow)
