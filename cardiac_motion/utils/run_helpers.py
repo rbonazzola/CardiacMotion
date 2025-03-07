@@ -19,59 +19,78 @@ import pandas as pd
 import torch
 from torch import Tensor
 from torch.utils.data import TensorDataset, DataLoader, random_split, SubsetRandomSampler
-from typing import Union, List, Optional
 
-import ipywidgets as widgets
-from ipywidgets import interact
+from typing import Union, List, Optional
 
 from data.DataModules import CardiacMeshPopulationDM, CardiacMeshPopulationDataset
 from cardio_mesh import Cardiac3DMesh
 from cardio_mesh.procrustes import transform_mesh
 
-from utils.image_helpers import generate_gif, merge_gifs_horizontally
+from cardiac_motion import PKG_DIR, MLFLOW_URI
 
-from main_autoencoder_cardiac import *
+from .image_helpers import generate_gif, merge_gifs_horizontally
+
 from config.load_config import load_yaml_config
 
-from models.Model3D import Encoder3DMesh, Decoder3DMesh
-from models.Model4D import DECODER_C_ARGS, DECODER_S_ARGS, ENCODER_ARGS
-from models.Model4D import DecoderStyle, DecoderContent, DecoderTemporalSequence 
-from models.Model4D import EncoderTemporalSequence, AutoencoderTemporalSequence
-from lightning.ComaLightningModule import CoMA_Lightning
-from lightning.EncoderLightningModule import TemporalEncoderLightning
-from models.TemporalAggregators import TemporalAggregator, FCN_Aggregator
-
-################################################################################
-
-mlflow_uri = f"{os.environ['HOME']}/01_repos/CardiacMotion/mlruns/"
-mlflow.set_tracking_uri(mlflow_uri)
-
-runs_df = mlflow.search_runs(experiment_ids=['3', '4', '5', '6', '7', '8'])
-    
-if len(runs_df) == 0:
-    raise ValueError(f"No runs found under URI {mlflow_uri} and experiment {experiment_ids}.")
-
-runs_df = runs_df[runs_df["metrics.val_recon_loss_c"] < 3]
-runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
-
-runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/rodrigo/CISTIB/repos/", "/mnt/data/workshop/workshop-user1/output/"))
-runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/home01/scrb/01_repos/", "/mnt/data/workshop/workshop-user1/output/"))    
-runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/1/", "/3/"))
-# runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/user/", "/rodrigo/"))
-
-################################################################################
-
-MESHES_PATH = "/mnt/data/workshop/workshop-user1/datasets/meshes/Results_Yan/"
-
-fhm_mesh = Cardiac3DMesh(
-  filename=f"{MESHES_PATH}/1000511/models/FHM_res_0.1_time001.npy",
-  faces_filename=f"{os.environ['HOME']}/01_repos/CardioMesh/data/faces_fhm_10pct_decimation.csv",
-  subpart_id_filename=f"{os.environ['HOME']}/01_repos/CardioMesh/data/subpartIDs_FHM_10pct.txt"
+from cardiac_motion import (
+    Encoder3DMesh,
+    FCN_Aggregator,
+    EncoderTemporalSequence,
+    DecoderContent,
+    DecoderStyle,
+    DecoderTemporalSequence,    
+    AutoencoderTemporalSequence,
+    ENCODER_ARGS,
+    DECODER_C_ARGS,
+    DECODER_S_ARGS,        
 )
 
+from lightning_modules.ComaLightningModule import CoMA_Lightning
+from lightning_modules.EncoderLightningModule import TemporalEncoderLightning
+
 ################################################################################
 
 
+expid_to_partition_mapping = { 3: "RV", 4: "LV", 5: "BV", 6: "LA", 7: "RA", 8: "aorta" }
+partition_to_expid_mapping = { v: k for k, v in expid_to_partition_mapping.items() }
+
+all_exp_ids = [ str(k) for k in expid_to_partition_mapping.keys() ]
+
+################################################################################
+
+def patch_artifact_uri(runs_df):
+
+    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/rodrigo/CISTIB/repos/", "/mnt/data/workshop/workshop-user1/output/"))
+    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/home01/scrb/01_repos/", "/mnt/data/workshop/workshop-user1/output/"))    
+    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/1/", "/3/"))
+    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/user/", "/rodrigo/"))
+
+    return runs_df
+
+
+def get_runs(exp_ids='all', metric="metrics.test_recon_loss_c", metric_threshold=3):
+   
+    if exp_ids == "all":
+        exp_ids = all_exp_ids
+
+    mlflow.set_tracking_uri(MLFLOW_URI)
+    
+    runs_df = mlflow.search_runs(experiment_ids=exp_ids)
+
+    assert len(runs_df) > 0, f"No runs found under URI {MLFLOW_URI} and experiment {exp_ids}."
+
+    runs_df = runs_df[runs_df[metric] < metric_threshold]
+    runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
+    runs_df = patch_artifact_uri(runs_df)
+        
+    return runs_df
+
+
+################################################################################
+
+import cardio_mesh
+ONE_RANDOM_ID = "1000511"; END_DIASTOLE = 1
+template_fhm_mesh = cardio_mesh.load_full_heart_mesh(ONE_RANDOM_ID, timeframe=END_DIASTOLE)
 
 ################################################################################
 
@@ -82,31 +101,28 @@ class Run():
         self.exp_id = runinfo.experiment_id
         self.run_id = runinfo.run_id
 
-        self._partition_mapping = {   
-            3: "right_ventricle",
-            4: "left_ventricle",
-            5: "biventricle",
-            6: "left_atrium",
-            7: "right_atrium",
-            8: "aorta"
-        }
+        self.partition = partition_mapping[int(self.exp_id)]
+
+        # self._FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
+        self._MEAN_ACROSS_CYCLE_FILE = f"{cardio_mesh.BASEDIR}/data/cached/mean_shape_time_avg__{self.partition}.npy"
+        self._PROCRUSTES_FILE = f"{cardio_mesh.BASEDIR}/data/cached/procrustes_transforms_{self.partition}.pkl"
         
-        self.partition = self._partition_mapping[int(self.exp_id)]  
-        self._FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
-        self._MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{self.partition}.npy"
-        self._PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{self.partition}.pkl"
-        self._SUBSETTING_MATRIX_FILE = f"/home/user/01_repos/CardioMesh/data/cached/subsetting_matrix_{self.partition}.pkl"
-        self.mean_shape = np.load(self._MEAN_ACROSS_CYCLE_FILE)
-        self.faces = fhm_mesh[partitions[self.partition]].f
+        self.mean_shape = cardio_mesh.paths.get_mean_shape(partition)
+        self._SUBSETTING_MATRIX_FILE = cardio_mesh.paths.get_subsetting_matrix(self.partition)
+        
+        # np.load(self._MEAN_ACROSS_CYCLE_FILE)
+        self.faces = template_fhm_mesh[partitions[self.partition]].f
         
         self.model_weights = None
         self.z_df = None
         
-        if load_model:
-            self.load_model()
-            
-        if load_dataloader:
-            self.load_dataloader()
+        self.template = EasyDict({
+          "v": np.load(self._MEAN_ACROSS_CYCLE_FILE),
+          "f": fhm_mesh[partitions[self.partition]].f
+        })
+
+        if load_model:      self.load_model()
+        if load_dataloader: self.load_dataloader()
     
     
     def get_ckpt_path(self):
@@ -165,18 +181,13 @@ class Run():
     
     def load_dataloader(self):
         
-        NT = 10 # config.dataset.parameters.T
+        NT = 10
 
         subsetting_matrix = pkl.load(open(self._SUBSETTING_MATRIX_FILE, "rb"))
     
-        template = EasyDict({
-          "v": np.load(self._MEAN_ACROSS_CYCLE_FILE),
-          "f": fhm_mesh[partitions[self.partition]].f
-        })
-        
         print("Loading datamodule...")
         cardiac_dataset = CardiacMeshPopulationDataset(
-            root_path=f"{os.environ['HOME']}/01_repos/CardiacMotion/data/cardio/Results", 
+            root_path=cardio_mesh.MESHES_DIR, 
             procrustes_transforms=self._PROCRUSTES_FILE,
             faces=template.f,
             subsetting_matrix=subsetting_matrix,
@@ -191,24 +202,24 @@ class Run():
         self.dataloader = mesh_dl
         
     
-    def build_model_from_ckpt(self):
-        
-        polynomial_degree = self.get_polynomial_degree()
-    
-        config.network_architecture.convolution.parameters.polynomial_degree = [polynomial_degree] * 4
-        ################################################
-      
-        subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
-    
-        template = EasyDict({
-          "v": np.load(MEAN_ACROSS_CYCLE_FILE),
-          "f": fhm_mesh[partitions[PARTITION]].f
-        })
+    # def build_model_from_ckpt(self):
+    #     
+    #     polynomial_degree = self.get_polynomial_degree()
+    # 
+    #     config.network_architecture.convolution.parameters.polynomial_degree = [polynomial_degree] * 4
+    #     ################################################
+    #   
+    #     subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
+    # 
+    #     template = EasyDict({
+    #       "v": np.load(MEAN_ACROSS_CYCLE_FILE),
+    #       "f": fhm_mesh[partitions[PARTITION]].f
+    #     })
 
         
     def _get_z_path(self):
         
-        z_file = f"{mlflow_uri}/{self.exp_id}/{self.run_id}/artifacts/latent_vector.csv"
+        z_file = f"{MLFLOW_URI}/{self.exp_id}/{self.run_id}/artifacts/latent_vector.csv"
             
         return z_file
 
@@ -288,18 +299,11 @@ class Run():
         self.model = t_ae
 
     
-def get_model(partition="left_ventricle", polynomial_degree=10, n_channels=[16, 16, 32, 32]):
+def get_model(partition="LV", polynomial_degree=10, n_channels=[16, 16, 32, 32]):
 
     from main_autoencoder_cardiac import get_coma_args
     
-    partitions = {
-      "left_atrium" : ("LA", "MVP", "PV1", "PV2", "PV3", "PV4", "PV5"),
-      "right_atrium" : ("RA", "TVP", "PV6", "PV7"),
-      "left_ventricle" : ("LV", "AVP", "MVP"),
-      "right_ventricle" : ("RV", "PVP", "TVP"),
-      "biventricle" : ("LV", "AVP", "MVP", "RV", "PVP", "TVP"),
-      "aorta" : ("aorta",)
-    }
+    partitions = cardio_mesh.Constants.closed_partitions
     
     # FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
     MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{partition}.npy"
@@ -344,6 +348,8 @@ def get_model(partition="left_ventricle", polynomial_degree=10, n_channels=[16, 
     config.network_architecture.latent_dim_s = 8
     config.loss.regularization.weight = 0
     
+    model = AutoencoderTemporalSequence.build_from_config(config, mesh_template, partition, n_timeframes)
+
     coma_args = get_coma_args(config)
     coma_matrices = get_coma_matrices(config, template, partition)
     coma_args.update(coma_matrices)
@@ -371,3 +377,20 @@ def get_model(partition="left_ventricle", polynomial_degree=10, n_channels=[16, 
         t_ae = t_ae.to("cuda:0")
     
     return t_ae
+
+
+def fetch_loci_mapping():
+
+    import requests
+    from io import StringIO
+    # https://docs.google.com/spreadsheets/d/1LbILFyaTHeRPit8v3gwx2Db4uS1Hnx6dibeGHK9zXcU/edit?usp=sharing
+    # LINK = 'https://docs.google.com/spreadsheet/ccc?key=1LbILFyaTHeRPit8v3gwx2Db4uS1Hnx6dibeGHK9zXcU&output=csv'
+    LINK = 'https://docs.google.com/spreadsheet/ccc?key=1XvVDFZSvcWWyVaLaQuTpglOqrCGB6Kdf6c78JJxymYw&output=csv'
+    response = requests.get(LINK)
+    assert response.status_code == 200, 'Wrong status code'
+    loci_mapping_df = pd.read_csv(
+        StringIO(response.content.decode()),
+        sep=","
+    ).set_index("region")
+    
+    return loci_mapping_df
