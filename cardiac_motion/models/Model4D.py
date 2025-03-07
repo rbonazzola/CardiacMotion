@@ -8,10 +8,17 @@ import logging
 from .Model3D import Encoder3DMesh, Decoder3DMesh
 from .PhaseModule import PhaseTensor
 
+from easydict import EasyDict
+
 from .TemporalAggregators import (
   Mean_Aggregator, 
   DFT_Aggregator, 
   FCN_Aggregator
+)
+
+from utils.helpers import (
+    get_coma_args,
+    get_coma_matrices
 )
 
 logging.basicConfig(
@@ -61,7 +68,7 @@ COMMON_ARGS = [
 
 ENCODER_ARGS   = COMMON_ARGS + ["phase_input", "downsample_matrices", "num_conv_filters_enc", "latent_dim_c", "latent_dim_s"]
 DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content"]
-DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style"]#, "n_timeframes"]
+DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style"]
 
 
 class AutoencoderTemporalSequence(nn.Module):
@@ -96,7 +103,39 @@ class AutoencoderTemporalSequence(nn.Module):
             
         self.is_variational = is_variational # self.encoder.encoder_3d_mesh._is_variational
 
-        # self.template_mesh = dec_c_config["template"]
+
+    @staticmethod
+    def build_from_config(config, mesh_template, partition, n_timeframes, phase_embedding_method="exp_v1"):
+
+        coma_matrices = get_coma_matrices(config, mesh_template, partition)
+        (coma_args := get_coma_args(config)).update(coma_matrices)
+      
+        enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
+        encoder = Encoder3DMesh(**enc_config, n_timeframes=n_timeframes)
+
+        assert "latent_dim" not in enc_config or enc_config.latent_dim == config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s, f"{latent_dim=} but it should equal the sum of {config.network_architecture.latent_dim_c=} and {config.network_architecture.latent_dim_s=}"
+
+        enc_config.latent_dim = config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s 
+    
+        x = torch.Tensor(mesh_template.v).unsqueeze(0).expand(n_timeframes, -1, -1).unsqueeze(0)
+        print(x.shape)
+
+        h = encoder.forward_conv_stack(x, preserve_graph_structure=False)
+        
+        model = AutoencoderTemporalSequence(
+            encoder = EncoderTemporalSequence(
+                encoder3d = encoder, 
+                z_aggr_function = FCN_Aggregator(features_in=n_timeframes * h.shape[-1], features_out=enc_config.latent_dim), 
+                is_variational=coma_args.is_variational
+            ), 
+            decoder = DecoderTemporalSequence(
+                decoder_content = DecoderContent.build_from_dictionary(coma_args),
+                decoder_style   = DecoderStyle.build_from_dictionary(coma_args, phase_embedding_method=phase_embedding_method, n_timeframes=n_timeframes),
+                is_variational=coma_args.is_variational),
+            is_variational=coma_args.is_variational
+        )
+
+        return model
 
                     
     def forward(self, s_t):
@@ -119,7 +158,7 @@ class AutoencoderTemporalSequence(nn.Module):
 
 class EncoderTemporalSequence(nn.Module):
 
-    def __init__(self, encoder3d, z_aggr_function, phase_embedding=None, n_timeframes=None, is_variational=False):
+    def __init__(self, encoder3d: Encoder3DMesh, z_aggr_function, phase_embedding=None, n_timeframes=None, is_variational=False):
 
         '''
         
@@ -192,6 +231,7 @@ PHASE_EMBEDDINGS = Literal[
     "exponential_v2", "exp_v2"
 ] 
 
+import inspect
 
 class DecoderContent(Decoder3DMesh):
     
@@ -203,6 +243,11 @@ class DecoderContent(Decoder3DMesh):
         decoder_c_config["n_timeframes"] = 1
         
         super(DecoderContent, self).__init__(**decoder_c_config)
+
+    @staticmethod
+    def build_from_dictionary(config_dict):
+        dec_config = {k: v for k, v in config_dict.items() if k in DECODER_C_ARGS}
+        return DecoderContent(dec_config)
                  
             
 class DecoderStyle(nn.Module):
@@ -260,6 +305,12 @@ class DecoderStyle(nn.Module):
         s_out = torch.cat(s_out, dim=1)
                 
         return s_out
+    
+
+    @staticmethod
+    def build_from_dictionary(config_dict, phase_embedding_method, n_timeframes):
+        dec_config = {k: v for k, v in config_dict.items() if k in DECODER_S_ARGS}
+        return DecoderStyle(dec_config, phase_embedding_method, n_timeframes)
       
             
 class DecoderTemporalSequence(nn.Module):

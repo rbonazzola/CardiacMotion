@@ -223,6 +223,11 @@ class Encoder3DMesh(nn.Module):
         x = x.reshape(x.shape[0], x.shape[1], -1)
         return x
 
+    @staticmethod
+    def build_from_dictionary(config_dict):
+        enc_config = {k: v for k, v in config_dict.items() if k in ENCODER_ARGS}
+        return Encoder3DMesh(**enc_config)
+
 
     # perform a forward pass only through the convolutional stack (not the FCN layer)
     def forward_conv_stack(self, x, preserve_graph_structure=True):
@@ -278,7 +283,6 @@ DECODER_ARGS = [
     "adjacency_matrices",
     "activation_layers",
     "template"
-    # "n_timeframes"
 ]
 
 class Decoder3DMesh(nn.Module):
@@ -392,6 +396,12 @@ class Decoder3DMesh(nn.Module):
             for i in range(len(self.n_nodes))
         ])
         return list(adj_edge_index), list(adj_norm)
+
+
+    @staticmethod
+    def build_from_dictionary(config_dict):
+        dec_config = {k: v for k, v in config_dict.items() if k in DECODER_ARGS}
+        return Decoder3DMesh(**dec_config)
 
 
     def forward(self, x):

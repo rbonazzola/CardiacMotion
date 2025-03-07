@@ -5,7 +5,6 @@ import sys;
 import pytorch_lightning as pl
 
 from data.DataModules import CardiacMeshPopulationDM
-from data.SyntheticDataModules import SyntheticMeshesDataset, SyntheticMeshesDM
 from utils import mesh_operations
 from utils.mesh_operations import Mesh
 
@@ -259,22 +258,3 @@ def get_lightning_trainer(trainer_args: Mapping):
         trainer_kwargs["gpus"] = None
         trainer = pl.Trainer(**trainer_kwargs)
     return trainer
-
-
-# def get_dm_model_trainer(config: Mapping, trainer_args: Mapping):
-#     
-#     '''
-#       Arguments:
-#         - config:
-#         - dm:    
-#       
-#       Return:
-#         a tuple of (PytorchLightning datamodule, PytorchLightning model, PytorchLightning trainer)
-#     '''
-# 
-#     # LOAD DATA
-#     dm = get_datamodule(config)
-#     model = get_lightning_module(config, dm.dataset)
-#     trainer = get_lightning_trainer(trainer_args)
-# 
-#     return dm, model, trainer

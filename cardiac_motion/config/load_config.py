@@ -5,6 +5,8 @@ from argparse import Namespace
 from collections.abc import MutableMapping
 from easydict import EasyDict
 
+from cardiac_motion import PKG_DIR
+
 CONFIG_FILES_DIR = "config_files"
 
 def rsetattr(obj, attr, val):
@@ -30,7 +32,7 @@ def is_yaml_file(x):
 
 
 def get_repo_rootdir():
-    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return os.path.dirname(PKG_DIR)
 
 
 def unfold_config(token, no_unfolding_for=[]):

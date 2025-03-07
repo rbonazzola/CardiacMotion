@@ -9,7 +9,6 @@ import numpy as np
 from argparse import Namespace
 
 from models.Model4D import AutoencoderTemporalSequence
-from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 
 losses_menu = {
   "l1": F.l1_loss,
@@ -137,7 +136,9 @@ class CoMA_Lightning(pl.LightningModule):
            "loss": train_loss
         }
 
-        self.train_outputs.append(loss_dict)
+        self.train_outputs.append({k: v.detach().cpu() for k, v in loss_dict.items()})
+
+        # self.train_outputs.append(loss_dict)
         # https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#log-dict
         self.log_dict(loss_dict)
         return loss_dict
@@ -159,6 +160,7 @@ class CoMA_Lightning(pl.LightningModule):
             "training_recon_loss_s": avg_recon_loss_s,
             "training_loss": avg_loss
           },
+          # on_epoch=False,
           on_epoch=True,
           prog_bar=True,
           logger=True,
@@ -264,7 +266,7 @@ class CoMA_Lightning(pl.LightningModule):
           "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
         
-        self.val_outputs.append(loss_dict)
+        self.val_outputs.append({k: v.detach().cpu() for k, v in loss_dict.items()})
         self.log_dict(loss_dict)
         return loss_dict
 
@@ -329,7 +331,7 @@ class CoMA_Lightning(pl.LightningModule):
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
 
-        self.test_outputs.append(loss_dict)
+        self.test_outputs.append({k: v.detach().cpu() for k, v in loss_dict.items()})
         self.log_dict(loss_dict)
         return loss_dict
 

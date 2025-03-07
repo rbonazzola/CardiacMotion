@@ -1,6 +1,6 @@
 import os, sys; 
 
-sys.path.append(BASE_DIR := os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.append(PKG_DIR := os.path.dirname(os.path.realpath(__file__)))
 
 from models.Model3D import (
   Encoder3DMesh, 
@@ -20,11 +20,13 @@ from models.TemporalAggregators import (
   TemporalAggregator, 
   FCN_Aggregator)
 
-import data.DataModules as data
+MLFLOW_URI = os.getenv("MLFLOW_URI", f"{os.path.dirname(PKG_DIR)}/mlruns")
 
-from utils import mlflow_helpers as mlflow
+import logging
 
-import config.load_config as config
-import config.cli_args as cli_args
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()])
 
-import paths as path_utils
+logger = logging.getLogger()
