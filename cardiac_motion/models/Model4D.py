@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch import nn
 
@@ -36,6 +37,7 @@ def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], 
 
     '''
        Make attributes from an object's child visible from the (parent) object's namespace
+       They can thus be accessed with a.c instead of a.b.c
     '''
 
     child = getattr(self, child)
@@ -81,6 +83,9 @@ class AutoencoderTemporalSequence(nn.Module):
 
         super(AutoencoderTemporalSequence, self).__init__()
         
+        self.n_timeframes = n_timeframes
+        self.is_variational = is_variational
+
         if encoder is not None:
             self.encoder = encoder            
         else:
@@ -100,12 +105,15 @@ class AutoencoderTemporalSequence(nn.Module):
                 phase_embedding_method=phase_embedding_method,
                 is_variational=is_variational
             )
-            
-        self.is_variational = is_variational # self.encoder.encoder_3d_mesh._is_variational
+                
+
+    @classmethod
+    def get_example_input_from_template(cls, mesh_template, n_timeframes):
+        return torch.Tensor(mesh_template.v).unsqueeze(0).expand(n_timeframes, -1, -1).unsqueeze(0)
 
 
-    @staticmethod
-    def build_from_config(config, mesh_template, partition, n_timeframes, phase_embedding_method="exp_v1"):
+    @classmethod
+    def build_from_config(cls, config, mesh_template, partition, n_timeframes, phase_embedding_method="exp_v1"):
 
         coma_matrices = get_coma_matrices(config, mesh_template, partition)
         (coma_args := get_coma_args(config)).update(coma_matrices)
@@ -117,9 +125,7 @@ class AutoencoderTemporalSequence(nn.Module):
 
         enc_config.latent_dim = config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s 
     
-        x = torch.Tensor(mesh_template.v).unsqueeze(0).expand(n_timeframes, -1, -1).unsqueeze(0)
-        print(x.shape)
-
+        x = cls.get_example_input_from_template(mesh_template, n_timeframes)
         h = encoder.forward_conv_stack(x, preserve_graph_structure=False)
         
         model = AutoencoderTemporalSequence(
@@ -165,10 +171,6 @@ class EncoderTemporalSequence(nn.Module):
         '''
         
         super(EncoderTemporalSequence, self).__init__()
-        # encoder_config = copy(encoder_config)
-        # encoder_config["latent_dim"] = encoder_config.pop("latent_dim_content") + encoder_config.pop("latent_dim_style")
-        # 
-        # self.latent_dim = encoder_config["latent_dim"]
 
         self.encoder_3d_mesh = encoder3d
 
@@ -244,10 +246,10 @@ class DecoderContent(Decoder3DMesh):
         
         super(DecoderContent, self).__init__(**decoder_c_config)
 
-    @staticmethod
-    def build_from_dictionary(config_dict):
-        dec_config = {k: v for k, v in config_dict.items() if k in DECODER_C_ARGS}
-        return DecoderContent(dec_config)
+    @classmethod
+    def build_from_dictionary(cls, config_dict):
+        dec_config = { k: v for k, v in config_dict.items() if k in DECODER_C_ARGS }
+        return cls(dec_config)
                  
             
 class DecoderStyle(nn.Module):
@@ -307,10 +309,10 @@ class DecoderStyle(nn.Module):
         return s_out
     
 
-    @staticmethod
-    def build_from_dictionary(config_dict, phase_embedding_method, n_timeframes):
+    @classmethod
+    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes):
         dec_config = {k: v for k, v in config_dict.items() if k in DECODER_S_ARGS}
-        return DecoderStyle(dec_config, phase_embedding_method, n_timeframes)
+        return cls(dec_config, phase_embedding_method, n_timeframes)
       
             
 class DecoderTemporalSequence(nn.Module):
