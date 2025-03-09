@@ -14,45 +14,43 @@ import numpy as np
 
 import cardio_mesh
 
-from cardiac_motion import (
-    Encoder3DMesh,
-    FCN_Aggregator,
-    EncoderTemporalSequence,
-    DecoderContent,
-    DecoderStyle,
-    DecoderTemporalSequence,    
-    AutoencoderTemporalSequence,
-    ENCODER_ARGS,
-    DECODER_C_ARGS,
-    DECODER_S_ARGS,        
+from cardiac_motion import AutoencoderTemporalSequence
+
+from lightning_modules.ComaLightningModule import CoMA_Lightning
+from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
+
+
+from utils.mlflow_write_helpers import (
+    get_mlflow_parameters, 
+    get_mlflow_dataset_params,
+    mlflow_startup,
+    mlflow_log_additional_params
+)
+
+from utils.helpers import (
+    get_coma_args,
+    get_coma_matrices,
+    get_n_equispaced_timeframes
+)
+
+from utils.lightning_helpers import (
+    early_stopping,
+    model_checkpoint,
+    rich_model_summary,
+    progress_bar,
+    MemoryUsageCallback,
+    ModelCheckpointWithThreshold
 )
 
 from config.cli_args import (
-    CLI_args, overwrite_config_items
+    CLI_args, 
+    overwrite_config_items
 )
 
 from config.load_config import (
     load_yaml_config, 
     rgetattr,
     to_dict
-)
-
-from lightning_modules.ComaLightningModule import CoMA_Lightning
-from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
-
-
-from utils.mlflow_helpers import (
-    get_mlflow_parameters, 
-    get_mlflow_dataset_params    
-)
-
-from utils.helpers import (
-    get_coma_args,
-    get_coma_matrices,
-    early_stopping,
-    model_checkpoint,
-    rich_model_summary,
-    progress_bar
 )
 
 ################################################################################################
@@ -63,100 +61,7 @@ profiler = SimpleProfiler(filename='simple_profiler_output.txt')
 
 from cardiac_motion import logger
 
-# import logging
-# 
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s [%(levelname)s] %(message)s",
-#     handlers=[logging.StreamHandler()])
-# 
-# logger = logging.getLogger()
-
-################################################################################################
-
-def mlflow_startup(mlflow_config):
-    
-    '''
-      Starts MLflow run      
-      mlflow_config: Namespace including run_id, experiment_name, run_name, artifact_location            
-    
-    '''
-    
-    mlflow.pytorch.autolog(log_models=True)
- 
-    if mlflow_config.tracking_uri is not None:
-        mlflow.set_tracking_uri(mlflow_config.tracking_uri)
-    
-    try:
-        exp_id = mlflow.create_experiment(mlflow_config.experiment_name, artifact_location=mlflow_config.artifact_location)
-    except:
-      # If the experiment already exists, we can just retrieve its ID
-        experiment = mlflow.get_experiment_by_name(mlflow_config.experiment_name)
-        print(experiment)
-        exp_id = experiment.experiment_id
-
-    run_info = {
-        "run_id": trainer.logger.run_id,
-        "experiment_id": exp_id,
-        "run_name": mlflow_config.run_name,
-        # "tags": config.additional_mlflow_tags
-    }
-    
-    mlflow.start_run(**run_info)
-    
-        
-def mlflow_log_additional_params(config):
-    
-    '''
-    Log additional parameters, extracted from config
-    '''
-        
-    mlflow_params = get_mlflow_parameters(config)
-    mlflow_dataset_params = get_mlflow_dataset_params(config)
-    mlflow_params.update(mlflow_dataset_params)
-    mlflow.log_params(mlflow_params)    
-        
-        
-def log_computational_graph(model, x):
-    
-    from torchviz import make_dot
-    yhat = model(x)
-    make_dot(yhat, params=dict(list(model.named_parameters()))).render("comp_graph_network", format="png")
-    mlflow.log_figure("comp_graph_network.png")
-        
-
-class MemoryUsageCallback(pl.Callback):
-    def on_epoch_end(self, trainer, pl_module):
-        print(f'Memory allocated: {torch.cuda.memory_allocated()} bytes')
-        print(f'Memory cached: {torch.cuda.memory_reserved()} bytes')
-
-
-class ModelCheckpointWithThreshold(ModelCheckpoint):
-
-    def __init__(self, monitor, threshold, mode='min', *args, **kwargs):
-        super().__init__(monitor=monitor, mode=mode, *args, **kwargs)
-        self.threshold = threshold
-
-    def _should_save_checkpoint(self, trainer):
-        
-        current = trainer.callback_metrics.get(self.monitor)
-        
-        if current is None:
-            return False
-        
-        if self.mode == 'min':
-            return current < self.threshold
-        else:
-            return current > self.threshold
-
-
 ##########################################################################################
-
-def get_n_equispaced_timeframes(n_timeframes):
-    
-    assert n_timeframes in {2, 5, 10, 25, 50}, f"Number of timeframes (args.n_timeframes) is {args.n_timeframes} which does not divide 50."
-    phases = 1 + (50 / n_timeframes) * np.array(range(n_timeframes))    
-
 
 def add_trainer_args(parser):
     
