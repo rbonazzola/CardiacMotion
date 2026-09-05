@@ -1,9 +1,17 @@
 import time
 import math
 import heapq
+import logging
 import numpy as np
 import scipy.sparse as sp
-from psbody.mesh import Mesh
+
+logger = logging.getLogger(__name__)
+
+class Mesh:
+    """Minimal mesh container (replaces psbody.mesh.Mesh)."""
+    def __init__(self, v, f):
+        self.v = np.array(v, dtype=np.float64)
+        self.f = np.array(f, dtype=np.uint32)
 
 def row(A):
     return A.reshape((1, -1))
@@ -101,6 +109,14 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     if n_verts_desired is None:
         n_verts_desired = math.ceil(len(mesh.v) * factor)
 
+    decimation_start = time.perf_counter()
+    logger.info(
+        "QSlim decimation started: vertices=%d, faces=%d, target_vertices=%d",
+        len(mesh.v),
+        len(mesh.f),
+        n_verts_desired,
+    )
+
     Qv = vertex_quadrics(mesh)
 
     # fill out a sparse matrix indicating vertex-vertex adjacency
@@ -140,7 +156,7 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
         cost = collapse_cost(Qv, r, c, mesh.v)['collapse_cost']
         heapq.heappush(queue, (cost, (r, c)))
 
-    start = time.time()
+    last_log = time.perf_counter()
     # decimate
     collapse_list = []
     nverts_total = len(mesh.v)
@@ -203,59 +219,63 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
             faces = faces[faces_to_keep, :].copy()
 
         nverts_total = (len(np.unique(faces.flatten())))
+        now = time.perf_counter()
+        if now - last_log > 15:
+            logger.info(
+                "QSlim decimation progress: vertices=%d/%d, target=%d, faces=%d, queue=%d, elapsed=%.1fs",
+                nverts_total,
+                len(mesh.v),
+                n_verts_desired,
+                len(faces),
+                len(queue),
+                now - decimation_start,
+            )
+            last_log = now
 
     new_faces, mtx = _get_sparse_transform(faces, len(mesh.v))
+    logger.info(
+        "QSlim decimation finished: vertices=%d -> %d, faces=%d, elapsed=%.2fs",
+        len(mesh.v),
+        len(np.unique(new_faces.flatten())),
+        len(new_faces),
+        time.perf_counter() - decimation_start,
+    )
     return new_faces, mtx
 
 
 def setup_deformation_transfer(source, target, use_normals=False):
-    rows = np.zeros(3 * target.v.shape[0])
-    cols = np.zeros(3 * target.v.shape[0])
-    coeffs_v = np.zeros(3 * target.v.shape[0])
-    coeffs_n = np.zeros(3 * target.v.shape[0])
+    import trimesh
 
-    nearest_faces, nearest_parts, nearest_vertices = source.compute_aabb_tree().nearest(target.v, True)
-    nearest_faces = nearest_faces.ravel().astype(np.int64)
-    nearest_parts = nearest_parts.ravel().astype(np.int64)
-    nearest_vertices = nearest_vertices.ravel()
+    start = time.perf_counter()
+    logger.info(
+        "Computing deformation transfer: source_vertices=%d, source_faces=%d, target_vertices=%d",
+        len(source.v),
+        len(source.f),
+        len(target.v),
+    )
+    source_trimesh = trimesh.Trimesh(vertices=source.v, faces=source.f, process=False)
+    closest_points, _, nearest_faces = source_trimesh.nearest.on_surface(target.v)
+    nearest_faces = nearest_faces.astype(np.int64)
+
+    rows     = np.zeros(3 * target.v.shape[0])
+    cols     = np.zeros(3 * target.v.shape[0])
+    coeffs_v = np.zeros(3 * target.v.shape[0])
 
     for i in range(target.v.shape[0]):
-        # Closest triangle index
-        f_id = nearest_faces[i]
-        # Closest triangle vertex ids
+        f_id      = nearest_faces[i]
         nearest_f = source.f[f_id]
+        p         = closest_points[i]
 
-        # Closest surface point
-        nearest_v = nearest_vertices[3 * i:3 * i + 3]
-        # Distance vector to the closest surface point
-        dist_vec = target.v[i] - nearest_v
-
-        rows[3 * i:3 * i + 3] = i * np.ones(3)
+        rows[3 * i:3 * i + 3] = i
         cols[3 * i:3 * i + 3] = nearest_f
 
-        n_id = nearest_parts[i]
-        if n_id == 0:
-            # Closest surface point in triangle
-            A = np.vstack((source.v[nearest_f])).T
-            coeffs_v[3 * i:3 * i + 3] = np.linalg.lstsq(A, nearest_v, rcond=None)[0]
-        elif n_id > 0 and n_id <= 3:
-            # Closest surface point on edge
-            A = np.vstack((source.v[nearest_f[n_id - 1]], source.v[nearest_f[n_id % 3]])).T
-            tmp_coeffs = np.linalg.lstsq(A, target.v[i], rcond=None)[0]
-            coeffs_v[3 * i + n_id - 1] = tmp_coeffs[0]
-            coeffs_v[3 * i + n_id % 3] = tmp_coeffs[1]
-        else:
-            # Closest surface point a vertex
-            coeffs_v[3 * i + n_id - 4] = 1.0
+        # Barycentric coordinates of p w.r.t. the triangle
+        A = source.v[nearest_f].T          # (3, 3): columns are triangle vertices
+        bary, *_ = np.linalg.lstsq(A, p, rcond=None)
+        coeffs_v[3 * i:3 * i + 3] = bary
 
-    #    if use_normals:
-    #        A = np.vstack((vn[nearest_f])).T
-    #        coeffs_n[3 * i:3 * i + 3] = np.linalg.lstsq(A, dist_vec)[0]
-
-    #coeffs = np.hstack((coeffs_v, coeffs_n))
-    #rows = np.hstack((rows, rows))
-    #cols = np.hstack((cols, source.v.shape[0] + cols))
     matrix = sp.csc_matrix((coeffs_v, (rows, cols)), shape=(target.v.shape[0], source.v.shape[0]))
+    logger.info("Deformation transfer computed in %.2fs", time.perf_counter() - start)
     return matrix
 
 
@@ -270,12 +290,28 @@ def generate_transform_matrices(mesh, factors):
        U: Upsampling transforms between each of the meshes
     """
 
-    factors = map(lambda x: 1.0 / x, factors)
+    factors = list(map(lambda x: 1.0 / x, factors))
+    logger.info(
+        "Generating transform matrices: initial_vertices=%d, initial_faces=%d, levels=%d, factors=%s",
+        len(mesh.v),
+        len(mesh.f),
+        len(factors),
+        factors,
+    )
     M, A, D, U = [], [], [], []
     A.append(get_vert_connectivity(mesh.v, mesh.f).tocoo())
     M.append(mesh)
 
     for i, factor in enumerate(factors):
+        level_start = time.perf_counter()
+        logger.info(
+            "Transform level %d/%d started: current_vertices=%d, current_faces=%d, keep_fraction=%.4f",
+            i + 1,
+            len(factors),
+            len(M[-1].v),
+            len(M[-1].f),
+            factor,
+        )
         ds_f, ds_D = qslim_decimator_transformer(M[-1], factor=factor)
         D.append(ds_D.tocoo())
         new_mesh_v = ds_D.dot(M[-1].v)
@@ -283,5 +319,14 @@ def generate_transform_matrices(mesh, factors):
         M.append(new_mesh)
         A.append(get_vert_connectivity(new_mesh.v, new_mesh.f).tocoo())
         U.append(setup_deformation_transfer(M[-1], M[-2]).tocoo())
+        logger.info(
+            "Transform level %d/%d finished: new_vertices=%d, new_faces=%d, elapsed=%.2fs",
+            i + 1,
+            len(factors),
+            len(new_mesh.v),
+            len(new_mesh.f),
+            time.perf_counter() - level_start,
+        )
 
+    logger.info("Transform matrices generated: n_nodes=%s", [len(m.v) for m in M])
     return M, A, D, U
