@@ -1,6 +1,9 @@
 import torch
+import hashlib
+import logging
 import os
 import sys;
+import time
 import numpy as np
 
 import pytorch_lightning as pl
@@ -13,6 +16,8 @@ import pickle as pkl
 
 from easydict import EasyDict
 from typing import Union, Mapping, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -69,27 +74,49 @@ def get_coma_matrices(config, template, partition, from_cached=True, cache=True)
     # mesh_popu = dm.train_dataset.dataset.mesh_popu
     downsample_factors = config.network_architecture.pooling.parameters.downsampling_factors
 
-    matrices_hash = hash((
-        hash("1000215"), 
-        hash(tuple(downsample_factors)), 
-        hash(partition)
-    )) % 1000000
+    cache_key = "|".join(
+        [
+            str(partition),
+            "downsample=" + ",".join(str(x) for x in downsample_factors),
+            f"vertices={len(template.v)}",
+            f"faces={len(template.f)}",
+        ]
+    )
+    matrices_hash = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
 
     cached_file = f"data/cached/matrices/{matrices_hash}.pkl"
+    logger.info(
+        "COMA matrices cache key=%s file=%s",
+        cache_key,
+        cached_file,
+    )
 
     if from_cached and os.path.exists(cached_file):
+        start = time.perf_counter()
+        logger.info("Loading cached COMA matrices from %s", cached_file)
         A_t, D_t, U_t, n_nodes = pkl.load(open(cached_file, "rb"))
+        logger.info("Loaded cached COMA matrices in %.2fs; n_nodes=%s", time.perf_counter() - start, n_nodes)
     else:
+        start = time.perf_counter()
+        logger.info(
+            "Generating COMA matrices from template: vertices=%d, faces=%d, downsample_factors=%s",
+            len(template.v),
+            len(template.f),
+            downsample_factors,
+        )
         template_mesh = Mesh(template.v, template.f)
         M, A, D, U = mesh_operations.generate_transform_matrices(
             template_mesh, downsample_factors,
         )
         n_nodes = [len(M[i].v) for i in range(len(M))]
+        logger.info("Converting scipy sparse matrices to torch sparse tensors")
         A_t, D_t, U_t = ([scipy_to_torch_sparse(x).float() for x in X] for X in (A, D, U))
         if cache:
             os.makedirs(os.path.dirname(cached_file), exist_ok=True)
+            logger.info("Saving COMA matrices cache to %s", cached_file)
             with open(cached_file, "wb") as ff:
                 pkl.dump((A_t, D_t, U_t, n_nodes), ff)
+        logger.info("Generated COMA matrices in %.2fs; n_nodes=%s", time.perf_counter() - start, n_nodes)
 
     return {
         "downsample_matrices": D_t,
@@ -141,5 +168,10 @@ def get_coma_args(config: Mapping): #, mesh_dataset: torch.utils.data.Dataset):
 
 def get_n_equispaced_timeframes(n_timeframes):
     
-    assert n_timeframes in {2, 5, 10, 25, 50}, f"Number of timeframes (args.n_timeframes) is {args.n_timeframes} which does not divide 50."
-    phases = 1 + (50 / n_timeframes) * np.array(range(n_timeframes))    
+    valid_timeframes = {2, 5, 10, 25, 50}
+    assert n_timeframes in valid_timeframes, (
+        f"Number of timeframes is {n_timeframes}, but expected one of "
+        f"{sorted(valid_timeframes)}."
+    )
+    phases = 1 + (50 / n_timeframes) * np.array(range(n_timeframes))
+    return phases.astype(int).tolist()
