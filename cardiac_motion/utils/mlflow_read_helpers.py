@@ -71,7 +71,14 @@ class Run():
     checkpoint_locations = None
 
     @classmethod
-    def get_runs(cls, exp_ids='all', metric="metrics.test_recon_loss_c", metric_threshold=3):
+    def get_runs(cls, exp_ids='all', metric="metrics.val_recon_loss_c", metric_threshold=5, only_runid_as_key=True):
+
+        """
+        :param exp_ids: a list of experiment IDs to filter the runs from. If "all", will fetch runs for all experiments.
+        :param metric: the metric to filter the runs by.
+        :param metric_threshold: the threshold for the metric.
+        :param runid_as_key: if True, will set the index of the resulting DataFrame to be the run_id, else it will be (experiment_id, run_id).
+        """
          
         if exp_ids == "all":
             exp_ids = cls.all_exp_ids
@@ -81,7 +88,11 @@ class Run():
         assert len(runs_df) > 0, f"No runs found under URI {MLFLOW_URI} and experiment {exp_ids}."
     
         runs_df = runs_df[runs_df[metric] < metric_threshold]
-        runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
+
+        if only_runid_as_key:
+            runs_df = runs_df.set_index("run_id", drop=False)
+        else:
+            runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
         runs_df = patch_artifact_uri(runs_df)
             
         return runs_df
