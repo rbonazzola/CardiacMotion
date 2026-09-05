@@ -8,3 +8,25 @@ lightning_logs/
 *.sif
 data/synthetic/synthetic_*
 config_files/*
+
+# Editor / workspace files
+.vscode/
+*.code-workspace
+
+# MLflow file-store artifacts written directly to repo root
+# (experiment_id/run_id dirs created when tracking_uri points at ".")
+/[0-9]*/
+
+# Generated data & run outputs (large, not source)
+/data/
+/output/
+sync.log
+
+# Build artifacts
+*.egg-info/
+
+# Never commit credentials
+docker/ssh_keys/
+
+# Scratch code marked for deletion
+cardiac_motion/models/lightning_to_delete/
