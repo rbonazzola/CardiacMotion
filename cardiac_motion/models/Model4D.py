@@ -11,11 +11,7 @@ from .PhaseModule import PhaseTensor
 
 from easydict import EasyDict
 
-from .TemporalAggregators import (
-  Mean_Aggregator, 
-  DFT_Aggregator, 
-  FCN_Aggregator
-)
+from .TemporalAggregators import FCN_Aggregator
 
 from utils.helpers import (
     get_coma_args,
@@ -32,6 +28,13 @@ BATCH_DIMENSION = 0
 TIME_DIMENSION = 1
 NODE_DIMENSION = 2
 FEATURE_DIMENSION = 3
+LOG_VAR_MIN = -10.0
+LOG_VAR_MAX = 10.0
+
+
+def clamp_log_var(log_var):
+    log_var = torch.nan_to_num(log_var, nan=0.0, posinf=LOG_VAR_MAX, neginf=LOG_VAR_MIN)
+    return torch.clamp(log_var, min=LOG_VAR_MIN, max=LOG_VAR_MAX)
 
 def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], str]):
 
@@ -51,7 +54,7 @@ def _steal_attributes_from_child(self, child: str, attributes: Union[List[str], 
 
 
 def sampling(mu, log_var):
-    std = torch.exp(0.5*log_var)
+    std = torch.exp(0.5 * clamp_log_var(log_var))
     eps = torch.randn_like(std)
     return eps.mul(std).add_(mu)
 
@@ -179,8 +182,8 @@ class EncoderTemporalSequence(nn.Module):
         self.z_aggr_function_mu = z_aggr_function        
         self.z_aggr_function_log_var = deepcopy(z_aggr_function)
         
-        torch.nn.init.normal_(self.z_aggr_function_log_var.fcn.weight, 0, 1e-5)
         torch.nn.init.normal_(self.z_aggr_function_mu.fcn.weight, 0, 1e-5)
+        torch.nn.init.normal_(self.z_aggr_function_log_var.fcn.weight, 0, 1e-5)
         
         self.phase_embedding = phase_embedding
         self.is_variational = is_variational
@@ -217,7 +220,7 @@ class EncoderTemporalSequence(nn.Module):
             log_var = None
             
         bottleneck = {"mu": mu, "log_var": log_var}
-        return bottleneck
+        return EasyDict(bottleneck)
 
 
     def forward(self, x):
@@ -317,17 +320,14 @@ class DecoderStyle(nn.Module):
             
 class DecoderTemporalSequence(nn.Module):
 
-    # def __init__(self, decoder_c_config, decoder_s_config, phase_embedding_method: PHASE_EMBEDDINGS = "exp", n_timeframes=None):
     def __init__(self, decoder_content, decoder_style, is_variational):
 
         super(DecoderTemporalSequence, self).__init__()
 
-        # self.template_mesh = decoder_c_config["template"]
-        
         self.latent_dim_content = decoder_content.latent_dim
         
         #TOFIX: 
-        self.latent_dim_style = (decoder_style.decoder_3d.latent_dim - self.latent_dim_content) / 2
+        self.latent_dim_style = (decoder_style.decoder_3d.latent_dim - self.latent_dim_content) // 2
         
         self.decoder_content = decoder_content
         self.decoder_style = decoder_style
@@ -358,7 +358,7 @@ class DecoderTemporalSequence(nn.Module):
         else:
             z_c, z_s = mu_c, mu_s
         
-        # Compute time-averaged shape
+        # Compute "static" shape
         avg_shape = self.decoder_content(z_c)
         
         # Compute deformation with respect to time-averaged shape
