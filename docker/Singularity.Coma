@@ -1,0 +1,128 @@
+Bootstrap: docker
+From: nvidia/cuda:11.3.0-cudnn8-devel-ubuntu20.04
+Stage: spython-base
+
+%post
+# FROM ubuntu:18.04
+# FROM nvidia/cuda:11.3.1-cudnn8-devel-ubuntu18.04
+# FROM nvidia/cuda:10.2-cudnn8-devel-ubuntu18.04
+
+apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
+apt-get update
+
+TZ=Etc/UTC && \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
+apt-get install -y \
+curl \
+ca-certificates \
+vim \
+sudo \
+git \
+bzip2 \
+libx11-6 \
+wget \
+zip tar unzip \
+&& rm -rf /var/lib/apt/lists/*
+
+apt-get update
+apt-get install -y gcc
+apt-get install -y tmux
+apt-get install -y make
+apt-get install -y --reinstall build-essential
+apt-get install -y libboost-dev
+
+DEBIAN_FRONTEND=noninteractive
+apt-get update -y && \
+apt-get install -y build-essential libfuse-dev libcurl4-openssl-dev libxml2-dev pkg-config libssl-dev mime-support automake libtool
+apt-get install lsb-release -y
+
+apt-get update
+apt-get install ffmpeg libsm6 libxext6  -y
+# RUN apt install libopenblas-dev -y
+
+# Create a working directory.
+mkdir /app
+mkdir -p /app
+cd /app
+
+# Create a non-root user and switch to it.
+adduser --disabled-password --gecos '' --shell /bin/bash user \
+&& chown -R user:user /app
+echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-user
+# su -  user # USER user
+
+# All users can use /home/user as their home directory.
+HOME=/home/user
+chmod 777 /home/user
+
+# install Miniconda
+curl -so ~/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+&& chmod +x ~/miniconda.sh \
+&& ~/miniconda.sh -b -p ~/miniconda \
+&& rm ~/miniconda.sh
+PATH=/home/user/miniconda/bin:$PATH
+CONDA_AUTO_UPDATE_CONDA=false
+
+# Create a Python 3.9 environment.
+/home/user/miniconda/bin/conda install conda-build
+/home/user/miniconda/bin/conda create -y --name cardiac_motion python=3.9
+/home/user/miniconda/bin/conda clean -ya
+
+CONDA_DEFAULT_ENV=cardiac_motion
+CONDA_PREFIX=/home/user/miniconda/envs/$CONDA_DEFAULT_ENV
+PATH=$CONDA_PREFIX/bin:$PATH
+
+TORCH=1.12
+CUDA=cu113
+conda install -c anaconda libopenblas
+conda install numpy=1.23.5 -c conda-forge
+conda install pytorch=${TORCH} torchvision torchaudio cudatoolkit=11.3 -c pytorch
+conda install tqdm -c conda-forge
+conda install jupyter -c anaconda
+conda install pytorch-lightning -c conda-forge
+conda install mlflow==2.1.1 -c conda-forge
+pip install pyg-lib torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-1.12.0+${CUDA}.html
+pip install torch-geometric
+pip install easydict
+# RUN conda install pyg -c pyg -c conda-forge
+
+pip install torch-cluster -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+pip install torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+# Install vtk and others
+pip install vtk meshio vedo trimesh pyvista icosphere
+pip install surgeon_pytorch
+
+# Install psbody-mesh
+mkdir -p /home/user
+cd /home/user
+git clone https://github.com/MPI-IS/mesh.git
+mkdir -p mesh
+cd mesh
+make all
+
+pip install nvgpu
+
+pip install -U numpy==1.23.5
+pip install pyDeprecate==0.3.1
+pip install setuptools==59.5.0
+
+mkdir -p $HOME
+cd $HOME
+%environment
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/home/user
+export PATH=/home/user/miniconda/bin:$PATH
+export CONDA_AUTO_UPDATE_CONDA=false
+export CONDA_DEFAULT_ENV=cardiac_motion
+export CONDA_PREFIX=/home/user/miniconda/envs/$CONDA_DEFAULT_ENV
+export PATH=$CONDA_PREFIX/bin:$PATH
+export TORCH=1.12
+export CUDA=cu113
+%runscript
+cd $HOME
+exec /bin/bash "$@"
+%startscript
+cd $HOME
+exec /bin/bash "$@"

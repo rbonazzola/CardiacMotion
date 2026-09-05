@@ -1,0 +1,33 @@
+name: cardiac-motion
+channels:
+  - pytorch
+  - nvidia
+  - pyg
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.4.1
+  - pytorch-cuda=12.4
+  - pytorch-lightning=2.4.0
+  - pyg=2.6.1
+  - pytorch-scatter=2.1.2
+  - pytorch-sparse=0.6.18
+  - pytorch-cluster=1.6.3
+  - numpy=1.26
+  - scipy
+  - meshio=5.3
+  - vtk=9.3
+  - trimesh
+  - rtree
+  - tqdm
+  - easydict
+  - packaging
+  - rich
+  - mlflow=2.14.0
+  - setuptools<81
+  - ipython
+  - imageio
+  - pip:
+      - vedo
+      - icosphere
