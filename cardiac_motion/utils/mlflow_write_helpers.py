@@ -1,4 +1,12 @@
 from subprocess import check_output
+import logging
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+
+import mlflow
+
+logger = logging.getLogger(__name__)
 
 def get_mlflow_parameters(config):
     loss = config.loss
@@ -80,6 +88,61 @@ def print_auto_logged_info(r):
     print("tags: {}".format(tags))
 
 
+def prepare_mlflow_config(mlflow_config):
+    """Normalize MLflow paths and avoid stale experiments with unwritable artifact dirs."""
+
+    if mlflow_config.tracking_uri is not None and "://" not in str(mlflow_config.tracking_uri):
+        mlflow_config.tracking_uri = str(Path(mlflow_config.tracking_uri).resolve())
+
+    if mlflow_config.artifact_location is not None and "://" not in str(mlflow_config.artifact_location):
+        mlflow_config.artifact_location = str(Path(mlflow_config.artifact_location).resolve())
+
+    mlflow.set_tracking_uri(mlflow_config.tracking_uri)
+    experiment = mlflow.get_experiment_by_name(mlflow_config.experiment_name)
+
+    if experiment is not None and not _artifact_location_is_writable(experiment.artifact_location):
+        original_name = mlflow_config.experiment_name
+        mlflow_config.experiment_name = f"{original_name}_local"
+        mlflow_config.artifact_location = None
+        logger.warning(
+            "MLflow experiment %r uses unwritable artifact_location=%r. "
+            "Using experiment %r instead.",
+            original_name,
+            experiment.artifact_location,
+            mlflow_config.experiment_name,
+        )
+
+    return mlflow_config
+
+
+def _artifact_location_is_writable(artifact_location):
+    path = _local_artifact_path(artifact_location)
+    if path is None:
+        return True
+
+    if str(path).startswith("/home/user"):
+        return False
+
+    probe = path if path.exists() else path.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+
+    return os.access(probe, os.W_OK)
+
+
+def _local_artifact_path(artifact_location):
+    if artifact_location is None:
+        return None
+
+    artifact_location = str(artifact_location)
+    parsed = urlparse(artifact_location)
+    if parsed.scheme and parsed.scheme != "file":
+        return None
+    if parsed.scheme == "file":
+        return Path(parsed.path)
+    return Path(artifact_location)
+
+
 def mlflow_startup(mlflow_config):
     
     '''
@@ -88,24 +151,23 @@ def mlflow_startup(mlflow_config):
     
     '''
     
-    mlflow.pytorch.autolog(log_models=True)
+    mlflow.pytorch.autolog(log_models=getattr(mlflow_config, "log_models", False))
  
     if mlflow_config.tracking_uri is not None:
         mlflow.set_tracking_uri(mlflow_config.tracking_uri)
     
     try:
-        exp_id = mlflow.create_experiment(mlflow_config.experiment_name, artifact_location=mlflow_config.artifact_location)
+        mlflow_config.exp_id = mlflow.create_experiment(mlflow_config.experiment_name, artifact_location=mlflow_config.artifact_location)
     except:
       # If the experiment already exists, we can just retrieve its ID
         experiment = mlflow.get_experiment_by_name(mlflow_config.experiment_name)
-        print(experiment)
-        exp_id = experiment.experiment_id
+        logger.info("Using existing MLflow experiment: %s", experiment)
+        mlflow_config.exp_id = experiment.experiment_id
 
     run_info = {
-        "run_id": trainer.logger.run_id,
-        "experiment_id": exp_id,
+        "run_id": mlflow_config.run_id,
+        "experiment_id": mlflow_config.exp_id,
         "run_name": mlflow_config.run_name,
-        # "tags": config.additional_mlflow_tags
     }
     
     mlflow.start_run(**run_info)
