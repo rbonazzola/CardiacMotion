@@ -15,14 +15,15 @@ import yaml
 from IPython import embed
 from utils.image_helpers import generate_gif, merge_gifs_horizontally
 
-os.environ['HOME'] = "/home/user"
-os.environ['CARDIAC_MOTION_REPO'] = os.environ["HOME"] + "/01_repos/CardiacMotion"
-os.chdir(os.environ['CARDIAC_MOTION_REPO'])
+import cardiac_motion
+from cardiac_motion import PKG_DIR, MLFLOW_URI
+from cardio_mesh.paths import get_fhm_faces_file, get_subsetting_matrix, DATA_DIR
 
-sys.path.append(os.environ['CARDIAC_MOTION_REPO'])
+CARDIAC_MOTION_REPO = os.environ.get("CARDIAC_MOTION_REPO", os.path.dirname(PKG_DIR))
+os.chdir(CARDIAC_MOTION_REPO)
+sys.path.append(CARDIAC_MOTION_REPO)
 
-MLFLOW_TRACKING_URI = f"{os.environ['HOME']}/01_repos/CardiacMotion/mlruns/"
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_tracking_uri(MLFLOW_URI)
 
 # Choose runs with good performance
 df = mlflow.search_runs(experiment_ids=[str(i) for i in range(2,9)])
@@ -56,11 +57,19 @@ from fuzzywuzzy import fuzz, process
 
 ######################################################################
 
+try:
+    MESHES_ROOT = os.environ["CARDIAC_MESHES_ROOT"]
+except KeyError as exc:
+    raise RuntimeError(
+        "CARDIAC_MESHES_ROOT must be set to the directory holding the raw FHM meshes "
+        "(e.g. .../datasets/meshes/Results_Yan) -- this data lives outside the repo."
+    ) from exc
+
 ID = "1000511"
 fhm_mesh = Cardiac3DMesh(
-   filename=f"/mnt/data/workshop/workshop-user1/datasets/meshes/Results_Yan/{ID}/models/FHM_res_0.1_time001.npy",
-   faces_filename="/home/user/01_repos/CardioMesh/data/faces_fhm_10pct_decimation.csv",
-   subpart_id_filename="/home/user/01_repos/CardioMesh/data/subpartIDs_FHM_10pct.txt"
+   filename=f"{MESHES_ROOT}/{ID}/models/FHM_res_0.1_time001.npy",
+   faces_filename=get_fhm_faces_file(),
+   subpart_id_filename=os.path.join(DATA_DIR, "subpartIDs_FHM_10pct.txt")
 )
 
 df = df[df['metrics.test_rec_ratio_to_time_mean'] < 0.8] 
@@ -83,7 +92,7 @@ for runid, row in df.iterrows():
     expid = row.experiment_id
 
     #### CHECKPOINT
-    ckpt_dir = f"{os.environ['HOME']}/01_repos/CardiacMotion/{expid}/{runid}/checkpoints"
+    ckpt_dir = f"{CARDIAC_MOTION_REPO}/{expid}/{runid}/checkpoints"
     ckpt_path = f"{ckpt_dir}/{os.listdir(ckpt_dir)[0]}"
 
     # model_weights = torch.load(ckpt_path, map_location=torch.device('cpu'))["state_dict"]
@@ -101,12 +110,10 @@ for runid, row in df.iterrows():
     config.network_architecture.convolution.parameters.polynomial_degree = [POLYNOMIAL_DEGREE] * 4
     ################################################
     
-    FACES_FILE = "utils/CardioMesh/data/faces_and_downsampling_mtx_frac_0.1_LV.pkl"
-    MEAN_ACROSS_CYCLE_FILE = f"utils/CardioMesh/data/cached/mean_shape_time_avg__{PARTITION}.npy"
-    PROCRUSTES_FILE = f"utils/CardioMesh/data/cached/procrustes_transforms_{PARTITION}.pkl"    
-    SUBSETTING_MATRIX_FILE = f"/home/user/01_repos/CardioMesh/data/cached/subsetting_matrix_{PARTITION}.pkl" 
-    
-    subsetting_matrix = pkl.load(open(SUBSETTING_MATRIX_FILE, "rb"))
+    MEAN_ACROSS_CYCLE_FILE = os.path.join(DATA_DIR, "cached", f"mean_shape_time_avg__{PARTITION}.npy")
+    PROCRUSTES_FILE = os.path.join(DATA_DIR, "cached", f"procrustes_transforms_{PARTITION}.pkl")
+
+    subsetting_matrix = get_subsetting_matrix(PARTITION)
     
     template = EasyDict({
       "v": np.load(MEAN_ACROSS_CYCLE_FILE),
@@ -172,9 +179,7 @@ for runid, row in df.iterrows():
     
     mesh_dl = torch.utils.data.DataLoader(cardiac_dataset, batch_size=128, num_workers=16)
     
-    MLRUNS_DIR = "/mnt/data/workshop/workshop-user1/output/CardiacMotion/mlruns"
-    # RUN_ID = "8c1ffa20cacc4b6c88e18159e01867b4"
-    ZFILE = f"{MLRUNS_DIR}/{expid}/{runid}/artifacts/latent_vector.csv"
+    ZFILE = f"{MLFLOW_URI}/{expid}/{runid}/artifacts/latent_vector.csv"
     
     x["s_t"] = x["s_t"].to("cuda:0")
     output = t_ae(x["s_t"])
@@ -220,7 +225,7 @@ for runid, row in df.iterrows():
     subj_ids = list(range(2))
     faces = template.f
     
-    ODIR = f"{os.environ['HOME']}/01_repos/CardiacMotion/mlruns/{expid}/{runid}/artifacts/output/gif"            
+    ODIR = f"{MLFLOW_URI}/{expid}/{runid}/artifacts/output/gif"
    
     if os.path.exists(ODIR) and (len(os.listdir(ODIR)) == 0):
        continue

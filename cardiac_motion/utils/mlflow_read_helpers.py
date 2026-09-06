@@ -44,17 +44,6 @@ from config.load_config import load_yaml_config
 
 ################################################################################
 
-def patch_artifact_uri(runs_df):
-
-    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/rodrigo/CISTIB/repos/", "/mnt/data/workshop/workshop-user1/output/"))
-    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/home/home01/scrb/01_repos/", "/mnt/data/workshop/workshop-user1/output/"))    
-    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/1/", "/3/"))
-    runs_df.artifact_uri = runs_df.artifact_uri.apply(lambda x: x.replace("/user/", "/rodrigo/"))
-            
-    return runs_df
-
-################################################################################
-
 class Run():
 
     ONE_RANDOM_ID = "1000511"; END_DIASTOLE = 1
@@ -93,8 +82,7 @@ class Run():
             runs_df = runs_df.set_index("run_id", drop=False)
         else:
             runs_df = runs_df.set_index(["experiment_id", "run_id"], drop=False)
-        runs_df = patch_artifact_uri(runs_df)
-            
+
         return runs_df
 
 
@@ -155,18 +143,19 @@ class Run():
         checkpoint_locations = {}
     
         for i, row in cls.runs_df.iterrows():
-            
-            artifact_uri = row.artifact_uri
-            artifact_uri = artifact_uri.replace("file://", "")
+
+            # Rebuilt from MLFLOW_URI rather than row.artifact_uri, which mlflow records as an
+            # absolute path and which therefore breaks if the run was created on another machine.
+            run_base_dir = os.path.join(MLFLOW_URI, str(row.experiment_id), str(row.run_id))
             checkpoints = []
             try:
-                basepath = os.path.join(artifact_uri, "restored_model_checkpoint")        
+                basepath = os.path.join(run_base_dir, "artifacts", "restored_model_checkpoint")
                 checkpoints += [ os.path.join(basepath, x) for x in os.listdir(basepath)]
             except FileNotFoundError:
                 pass
-            
+
             try:
-                basepath = os.path.join(os.path.dirname(artifact_uri), "checkpoints")        
+                basepath = os.path.join(run_base_dir, "checkpoints")
                 checkpoints += [ os.path.join(basepath, x) for x in os.listdir(basepath)]
             except FileNotFoundError:
                 pass

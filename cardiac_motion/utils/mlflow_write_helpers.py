@@ -115,12 +115,17 @@ def prepare_mlflow_config(mlflow_config):
     return mlflow_config
 
 
+_STALE_ARTIFACT_PREFIXES = tuple(
+    p for p in os.environ.get("CARDIAC_MOTION_STALE_ARTIFACT_PREFIXES", "").split(os.pathsep) if p
+)
+
+
 def _artifact_location_is_writable(artifact_location):
     path = _local_artifact_path(artifact_location)
     if path is None:
         return True
 
-    if str(path).startswith("/home/user"):
+    if _STALE_ARTIFACT_PREFIXES and str(path).startswith(_STALE_ARTIFACT_PREFIXES):
         return False
 
     probe = path if path.exists() else path.parent
