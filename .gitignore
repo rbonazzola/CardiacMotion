@@ -8,6 +8,8 @@ lightning_logs/
 *.sif
 data/synthetic/synthetic_*
 config_files/*
+logs/*
+viz_output/*
 
 # Editor / workspace files
 .vscode/
