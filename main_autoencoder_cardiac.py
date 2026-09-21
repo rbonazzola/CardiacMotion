@@ -21,7 +21,7 @@ import cardio_mesh
 from cardiac_motion import AutoencoderTemporalSequence
 
 from lightning_modules.ComaLightningModule import CoMA_Lightning
-from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshPopulationDM
+from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshFromBValuesDataset, CardiacMeshPopulationDM
 
 
 from utils.mlflow_write_helpers import (
@@ -214,6 +214,18 @@ if __name__ == "__main__":
     
     my_args.add_argument("--n_subjects", type=int, default=1000)
     my_args.add_argument("--partition", type=str, default="left_ventricle")
+    my_args.add_argument("--data_source", "--data-source", type=str, default="disk", choices=["disk", "bvalues"],
+                         help="'disk': load pre-reconstructed meshes from cardio_mesh.MESHES_DIR (default). "
+                              "'bvalues': reconstruct meshes on the fly from PDM b-values + transform "
+                              "parameters (see cardio_mesh/pdm_reconstruction.py) instead of reading full "
+                              "meshes from disk.")
+    my_args.add_argument("--bvalues_dir", "--bvalues-dir", type=str, default=None,
+                         help="Directory with one <subject_id>.npz per subject (bvals/translation/qrotation/scale). "
+                              "Required when --data_source=bvalues.")
+    my_args.add_argument("--procrustes_file", "--procrustes-file", type=str, default=None,
+                         help="Override path to the Procrustes transforms pkl (defaults to the cached "
+                              "one for --partition). Useful to point at a matching pkl for a custom "
+                              "--bvalues_dir whose subject IDs aren't in the cached population.")
     my_args.add_argument("--n_timeframes", type=int, default=50)
     my_args.add_argument("--use-closed-chambers", default=True, action='store_true')
     my_args.add_argument("--static_representative", type=str, default="end_diastole",
@@ -226,6 +238,35 @@ if __name__ == "__main__":
                          action="store_true",
                          help="Enable MLflow model autologging. Disabled by default because stale "
                               "artifact locations can point to non-writable paths.")
+    my_args.add_argument("--num_workers", "--num-workers", type=int, default=3,
+                         help="DataLoader worker processes. Match this to the job's --cpus-per-task "
+                              "(minus ~1 for the main process) -- the previous hardcoded default of 3 "
+                              "left most of an 8-CPU allocation idle.")
+    my_args.add_argument("--compile", default=False, action="store_true",
+                         help="Wrap the model with torch.compile before training. Opt-in: this "
+                              "model mixes ChebConv graph convolutions with sparse COMA "
+                              "pooling/unpooling matrices, a category with historically spottier "
+                              "torch.compile support than plain CNNs/transformers -- verify it "
+                              "actually helps (and doesn't silently fall back to eager) before "
+                              "relying on it.")
+    my_args.add_argument("--compile_mode", "--compile-mode", type=str, default="default",
+                         choices=["default", "reduce-overhead", "max-autotune"],
+                         help="torch.compile mode, only used when --compile is set.")
+    my_args.add_argument("--compile_cache_size_limit", "--compile-cache-size-limit", type=int, default=None,
+                         help="torch._dynamo.config.cache_size_limit, only used when --compile is set. "
+                              "This model calls the same nn.Module (e.g. ParallelBatchNorm1d) once per "
+                              "pooling layer with a different tensor shape each time (8 layers here: "
+                              "4 encoder + 4 decoder), and Dynamo compiles one specialization per "
+                              "distinct shape -- past PyTorch's default limit (8) it stops recompiling "
+                              "and silently falls back to eager for the rest, which is slow. Set this "
+                              "to (at least) the number of distinct shapes to avoid that fallback.")
+    my_args.add_argument("--translation_head", default=False, action="store_true",
+                         help="Give the style decoder an explicit per-frame rigid-translation output "
+                              "(a small Linear on the same latent used for the mesh, added to the "
+                              "decoded vertices), instead of relying on the per-vertex ChebConv decoder "
+                              "to reproduce the mesh's global position implicitly. Zero-initialized, so "
+                              "it starts as a no-op. Opt-in: adds parameters, not checkpoint-compatible "
+                              "with runs trained without it.")
     trainer_args = add_trainer_args(parser)    
     args = parser.parse_args()
 
@@ -283,28 +324,18 @@ if __name__ == "__main__":
     # 4. Load Data and Preprocess
     # --------------------------
     
-    ONE_RANDOM_ID = "1000511"; END_DIASTOLE = 1
     partition = args.partition
-    logger.info("Using cardiac mesh root: %s", cardio_mesh.MESHES_DIR)
     with log_step(f"Loading template and cached preprocessing for partition={partition}"):
         subsetting_matrix = cardio_mesh.paths.get_subsetting_matrix(partition)
         mean_shape        = cardio_mesh.paths.get_mean_shape(partition)
-        template_fhm_mesh = cardio_mesh.load_full_heart_mesh(ONE_RANDOM_ID, timeframe=END_DIASTOLE)
+        # Topology only (faces + per-vertex partition labels): subject-independent,
+        # so this never touches MESHES_DIR / any per-subject mesh file.
+        template_fhm_mesh = cardio_mesh.load_fhm_topology()
     logger.info("Subsetting matrix shape=%s; mean shape=%s", getattr(subsetting_matrix, "shape", None), mean_shape.shape)
     
     # This adds to the mesh the valve surfaces that close up the different chambers
-    _partition_to_closed = {
-        "left_ventricle":  "LV_closed",
-        "right_ventricle": "RV_closed",
-        "biventricle":     "BV_closed",
-        "left_atrium":     "LA_closed",
-        "right_atrium":    "RA_closed",
-        "aorta":           "aorta",
-    }
     if args.use_closed_chambers:
-        closed_chamber = cardio_mesh.close_chamber(
-            _partition_to_closed.get(args.partition, args.partition)
-        )
+        closed_chamber = cardio_mesh.close_chamber(args.partition)
     else:
         closed_chamber = args.partition
     logger.info("Using mesh partition labels: %s", closed_chamber)
@@ -312,29 +343,55 @@ if __name__ == "__main__":
     phases_filter = get_n_equispaced_timeframes(args.n_timeframes)
     logger.info("Using %d phases: %s", len(phases_filter), phases_filter)
 
-    with log_step("Building cardiac dataset index"):
-        cardiac_dataset = CardiacMeshPopulationDataset(
-            root_path=cardio_mesh.MESHES_DIR,
-            procrustes_transforms=cardio_mesh.paths.get_procrustes_file(partition),
-            faces=(faces := template_fhm_mesh[closed_chamber].f),
-            subsetting_matrix=subsetting_matrix,
-            template_mesh=(mesh_template := EasyDict({"v": mean_shape, "f": faces})),
-            N_subj=(N_subj := args.n_subjects),
-            phases_filter=phases_filter,
-            center_around_mean=args.center_around_mean,
-        )
+    faces = template_fhm_mesh[closed_chamber].f
+    mesh_template = EasyDict({"v": mean_shape, "f": faces})
+    N_subj = args.n_subjects
+
+    procrustes_transforms = args.procrustes_file or cardio_mesh.paths.get_procrustes_file(partition)
+
+    with log_step(f"Building cardiac dataset index (data_source={args.data_source})"):
+        if args.data_source == "bvalues":
+            assert args.bvalues_dir, "--bvalues_dir is required when --data_source=bvalues"
+            cardiac_dataset = CardiacMeshFromBValuesDataset(
+                params_dir=args.bvalues_dir,
+                partition=partition,
+                procrustes_transforms=procrustes_transforms,
+                N_subj=N_subj,
+                phases_filter=phases_filter,
+                template_mesh=mesh_template,
+                center_around_mean=args.center_around_mean,
+            )
+        else:
+            logger.info("Using cardiac mesh root: %s", cardio_mesh.MESHES_DIR)
+            cardiac_dataset = CardiacMeshPopulationDataset(
+                root_path=cardio_mesh.MESHES_DIR,
+                procrustes_transforms=procrustes_transforms,
+                faces=faces,
+                subsetting_matrix=subsetting_matrix,
+                template_mesh=mesh_template,
+                N_subj=N_subj,
+                phases_filter=phases_filter,
+                center_around_mean=args.center_around_mean,
+            )
     logger.info("Dataset ready: subjects=%d, frames_per_subject=%d, vertices=%d, faces=%d",
                 len(cardiac_dataset), len(phases_filter), mesh_template.v.shape[0], mesh_template.f.shape[0])
 
     with log_step("Setting up datamodule splits"):
-        ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size) ).setup()
+        ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size, num_workers=args.num_workers) ).setup()
 
     # --------------------------
     # 5. Define Model
     # --------------------------
     
     with log_step("Building model and COMA matrices"):
+        config.network_architecture.translation_head = args.translation_head
         model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
+        if args.compile:
+            if args.compile_cache_size_limit is not None:
+                torch._dynamo.config.cache_size_limit = args.compile_cache_size_limit
+                logger.info("torch._dynamo.config.cache_size_limit set to %d", args.compile_cache_size_limit)
+            logger.info("Compiling model with torch.compile (mode=%s)...", args.compile_mode)
+            model = torch.compile(model, mode=args.compile_mode)
         lit_module = CoMA_Lightning(model=model, loss_params=config.loss, optimizer_params=config.optimizer, additional_params=config, mesh_template=mesh_template)
     logger.info("Model ready: trainable_parameters=%d", sum(p.numel() for p in lit_module.parameters() if p.requires_grad))
 
