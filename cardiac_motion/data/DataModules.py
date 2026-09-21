@@ -20,9 +20,26 @@ from cardio_mesh import (
     Cardiac3DMesh,    
 )
 
-from cardio_mesh.procrustes import transform_mesh
+from cardio_mesh import paths as cardio_mesh_paths
+from cardio_mesh.procrustes import transform_mesh, transform_mesh_torch
+from cardio_mesh.pdm_reconstruction import reconstruct_shapes_from_bvalues, reconstruct_shapes_from_bvalues_torch
 
 logger = logging.getLogger(__name__)
+
+
+def _cuda_usable() -> bool:
+    """torch.cuda.is_available() only checks the driver/build support a CUDA
+    device exists - it stays True even when that device is busy/unusable
+    (common on shared HPC nodes), which then crashes DataLoader pin_memory.
+    Probe with a real (tiny) allocation instead."""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        torch.zeros(1, device="cuda")
+        return True
+    except Exception:
+        return False
+
 
 def mse(s1, s2):
     return ((s1-s2)**2).sum(-1).mean(-1)
@@ -200,6 +217,199 @@ class CardiacMeshPopulationDataset(TensorDataset):
         return len(self.ids)
 
 
+class CardiacMeshFromBValuesDataset(TensorDataset):
+    '''
+    Reconstructs meshes from PDM b-values + the per-frame rigid/scale transform
+    predicted alongside them, instead of loading pre-reconstructed full-resolution
+    meshes from disk. See cardio_mesh/pdm_reconstruction.py for the composed
+    affine map (PCA reconstruction, already collapsed at decimation time to the
+    target partition, followed by the per-frame rigid inverse transform and the
+    per-subject population Procrustes transform).
+
+    Unlike a typical Dataset, the actual reconstruction does NOT happen in
+    __getitem__ (that would repeat the same deterministic PCA + Procrustes
+    computation, and the same per-subject .npz disk read, on every access, in
+    every epoch -- pure redundant work, since nothing here is randomized).
+    Instead:
+      - __init__ reads every subject's .npz ONCE and keeps the raw b-values/
+        pose/Procrustes parameters as in-memory tensors (small: a few hundred
+        MB at most, regardless of mesh resolution, since this never holds
+        reconstructed vertices).
+      - __getitem__ is just an index into those tensors -- cheap, no I/O, safe
+        to call from any number of DataLoader workers.
+      - decode_batch() does the actual PCA + rigid + Procrustes reconstruction,
+        batched, on whatever device the batch already lives on. It's meant to
+        be called from CardiacMeshPopulationDM.on_after_batch_transfer, i.e.
+        once per batch, on GPU, after the raw params have already been moved
+        there -- not once per subject, not on CPU.
+
+    decode_batch's output has the same EasyDict shape (s_t/time_avg_s/
+    d_content/d_style) the old per-item __getitem__ used to return, so
+    CardiacMeshPopulationDM and the training step don't need to change.
+    '''
+
+    def __init__(
+        self,
+        params_dir: str,
+        partition: str,
+        procrustes_transforms: Union[str, None] = None,
+        N_subj: Union[int, None] = None,
+        phases_filter=None,
+        template_mesh=None,
+        static_shape: Literal["end_diastole", "temporal_mean", "end_systole"] = "end_diastole",
+        center_around_mean: bool = False,
+        ):
+
+        '''
+          params_dir: directory with one <subject_id>.npz per subject, holding
+            "bvals" (T, n_components), "translation" (T, 3), "qrotation" (T, 4)
+            and "scale" (T,).
+          partition: which cached, pre-decimated PCA basis to reconstruct into
+            (see cardio_mesh.paths.get_pca_components / get_pca_mean).
+          procrustes_transforms: Mapping from IDs to transforms ("rotation" and "traslation"),
+            same population-alignment transform used by CardiacMeshPopulationDataset.
+        '''
+
+        if center_around_mean and template_mesh is None:
+            raise ValueError("center_around_mean=True requires template_mesh to be provided.")
+
+        start = time.perf_counter()
+        self._params_dir = params_dir
+        self.partition = partition
+
+        logger.info("Loading PCA basis for partition=%s", partition)
+        self.pca_components = Tensor(cardio_mesh_paths.get_pca_components(partition))
+        self.pca_mean = Tensor(cardio_mesh_paths.get_pca_mean(partition))
+        self._pca_device = None  # lazily-cached (components, mean) on whatever device decode_batch last saw
+
+        logger.info("Loading Procrustes transforms from %s", procrustes_transforms)
+        with open(procrustes_transforms, "rb") as f:
+            all_procrustes_transforms = pkl.load(f)
+
+        available_ids = {f[:-len(".npz")] for f in os.listdir(self._params_dir) if f.endswith(".npz")}
+        self.ids = sorted(available_ids.intersection(all_procrustes_transforms.keys()))
+        if N_subj is not None:
+            self.ids = self.ids[:N_subj]
+
+        self.template_mesh = template_mesh
+        self.static_shape = static_shape
+        self.center_around_mean = center_around_mean
+
+        frame_idx = None
+        if phases_filter is not None:
+            # frames in the .npz are 0-indexed; phases_filter follows the 1-indexed
+            # convention used by CardiacMeshPopulationDataset's filename regex.
+            frame_idx = [phase - 1 for phase in phases_filter]
+
+        logger.info("Preloading b-values/pose for %d subjects into memory...", len(self.ids))
+        load_start = time.perf_counter()
+        bvals_list, translation_list, qrotation_list, scale_list = [], [], [], []
+        rotation_list, traslation_list = [], []
+        for id in self.ids:
+            d = np.load(os.path.join(self._params_dir, f"{id}.npz"))
+            bvals, translation, qrotation, scale = d["bvals"], d["translation"], d["qrotation"], d["scale"]
+            if frame_idx is not None:
+                bvals, translation, qrotation, scale = (
+                    bvals[frame_idx], translation[frame_idx], qrotation[frame_idx], scale[frame_idx]
+                )
+            bvals_list.append(bvals)
+            translation_list.append(translation)
+            qrotation_list.append(qrotation)
+            scale_list.append(scale)
+            pr = all_procrustes_transforms[id]
+            rotation_list.append(pr["rotation"])
+            traslation_list.append(pr["traslation"])
+
+        self.bvals = Tensor(np.stack(bvals_list))              # (N, T, n_components)
+        self.translation = Tensor(np.stack(translation_list))  # (N, T, 3)
+        self.qrotation = Tensor(np.stack(qrotation_list))      # (N, T, 4)
+        self.scale = Tensor(np.stack(scale_list))               # (N, T)
+        self.proc_rotation = Tensor(np.stack(rotation_list))    # (N, 3, 3)
+        self.proc_traslation = Tensor(np.stack(traslation_list))  # (N, 3), from the Procrustes pkl
+
+        logger.info(
+            "B-values dataset indexed: subjects=%d, partition=%s, n_components=%d, n_verts=%d, "
+            "preload=%.1fs, total=%.2fs",
+            len(self.ids),
+            partition,
+            self.pca_components.shape[0],
+            self.pca_mean.shape[0] // 3,
+            time.perf_counter() - load_start,
+            time.perf_counter() - start,
+        )
+
+
+    def __len__(self):
+
+        return len(self.ids)
+
+
+    def __getitem__(self, idx):
+        # Deliberately cheap: no I/O, no reconstruction. See class docstring --
+        # the real work happens in decode_batch, once per batch, on GPU.
+        return {
+            "bvals": self.bvals[idx],
+            "translation": self.translation[idx],
+            "qrotation": self.qrotation[idx],
+            "scale": self.scale[idx],
+            "proc_rotation": self.proc_rotation[idx],
+            "proc_traslation": self.proc_traslation[idx],
+        }
+
+
+    def _pca_on(self, device):
+        if self._pca_device != device:
+            self._pca_components_dev = self.pca_components.to(device)
+            self._pca_mean_dev = self.pca_mean.to(device)
+            self._pca_device = device
+        return self._pca_components_dev, self._pca_mean_dev
+
+
+    def decode_batch(self, batch):
+        '''
+        batch: dict with bvals/translation/qrotation/scale/proc_rotation/
+        proc_traslation, already collated and moved to the target device (by
+        CardiacMeshPopulationDM.on_after_batch_transfer). Returns the same
+        EasyDict(s_t/time_avg_s/d_content/d_style) shape the old per-item
+        __getitem__ used to return, batched over the leading dimension.
+        '''
+        device = batch["bvals"].device
+        pca_components, pca_mean = self._pca_on(device)
+
+        s_t = reconstruct_shapes_from_bvalues_torch(
+            batch["bvals"], batch["translation"], batch["qrotation"], batch["scale"],
+            pca_components, pca_mean,
+        )  # (B, T, n_verts, 3)
+        s_t = transform_mesh_torch(s_t, batch["proc_rotation"], batch["proc_traslation"])
+
+        if self.static_shape == "end_diastole":
+            s_t_avg = s_t[:, 0]
+        elif self.static_shape == "temporal_mean":
+            s_t_avg = s_t.mean(dim=1)
+        else:
+            raise NotImplementedError
+
+        dev_from_tmp_avg = mse(s_t, s_t_avg.unsqueeze(1))
+
+        if self.template_mesh is not None:
+            template_v = torch.as_tensor(self.template_mesh.v, dtype=s_t.dtype, device=device)
+            dev_from_sphere = mse(s_t, template_v.unsqueeze(0).unsqueeze(0))
+        else:
+            template_v = None
+            dev_from_sphere = None
+
+        if self.center_around_mean:
+            s_t = s_t - template_v
+            s_t_avg = s_t_avg - template_v
+
+        return EasyDict({
+            "s_t": s_t,
+            "time_avg_s": s_t_avg,
+            "d_content": dev_from_tmp_avg,
+            "d_style": dev_from_sphere,
+        })
+
+
 class CardiacMeshPopulationDM(pl.LightningDataModule):    
     
     '''
@@ -294,15 +504,28 @@ class CardiacMeshPopulationDM(pl.LightningDataModule):
  
     def train_dataloader(self):
         logger.info("Creating train dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=torch.cuda.is_available())
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
 
     def val_dataloader(self):
         logger.info("Creating val dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=torch.cuda.is_available())
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
 
     def test_dataloader(self):
         logger.info("Creating test dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=torch.cuda.is_available())
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
+
+    def on_after_batch_transfer(self, batch, dataloader_idx):
+        # Runs once per batch, after Lightning has already moved it to the
+        # target device (GPU). CardiacMeshFromBValuesDataset defers the PCA +
+        # rigid + Procrustes reconstruction to exactly this point (see its
+        # decode_batch docstring) instead of doing it per-subject, per-epoch,
+        # on CPU inside __getitem__. CardiacMeshPopulationDataset (the disk
+        # path) already returns fully-decoded batches, so it has no
+        # decode_batch and this is a no-op for it.
+        decode_batch = getattr(self.dataset, "decode_batch", None)
+        if decode_batch is not None:
+            return decode_batch(batch)
+        return batch
 
 
 class GenericDataModule(pl.LightningDataModule):
@@ -391,7 +614,7 @@ class GenericDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=self.shuffle_train,
             num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available(),
+            pin_memory=_cuda_usable(),
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -403,7 +626,7 @@ class GenericDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=self.shuffle_val,
             num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available(),
+            pin_memory=_cuda_usable(),
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -415,5 +638,5 @@ class GenericDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=self.shuffle_test,
             num_workers=self.num_workers,
-            pin_memory=torch.cuda.is_available(),
+            pin_memory=_cuda_usable(),
         )

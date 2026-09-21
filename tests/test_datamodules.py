@@ -3,16 +3,21 @@ Tests for cardiac_motion/data/DataModules.py
 
 Run with:  python -m unittest tests/test_datamodules.py -v
 """
+import os
+import pickle
 import sys
+import tempfile
 import types
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import numpy as np
 import torch
+from easydict import EasyDict
 from torch.utils.data import TensorDataset
 
 sys.path.insert(0, "cardiac_motion")
-from data.DataModules import CardiacMeshPopulationDM, GenericDataModule
+from data.DataModules import CardiacMeshPopulationDM, CardiacMeshFromBValuesDataset, GenericDataModule
 
 
 def make_dataset(n=100):
@@ -221,6 +226,185 @@ class TestDStyleContract(unittest.TestCase):
         """d_style=None no debe causar crash — cubierto en profundidad por test_training.py."""
         # Verified via TestTrainingStep.test_validation_step_with_none_d_style
         pass
+
+
+class TestCardiacMeshFromBValuesDataset(unittest.TestCase):
+    """
+    CardiacMeshFromBValuesDataset against an entirely synthetic PDM: no real
+    PCA basis / b-values / CardioMesh cache files are touched. get_pca_components
+    and get_pca_mean are patched to hand back a small made-up basis regardless
+    of the requested partition.
+    """
+
+    N_COMPONENTS = 3
+    N_VERTS = 4
+    T = 5
+
+    def setUp(self):
+        rng = np.random.default_rng(7)
+
+        self.pca_components = rng.normal(size=(self.N_COMPONENTS, self.N_VERTS * 3))
+        self.pca_mean = rng.normal(size=(self.N_VERTS * 3,))
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.params_dir = self._tmpdir.name
+
+        self.subjects = {
+            "S1": {"rotation": np.eye(3), "traslation": np.zeros(3)},  # identity: no-op
+            "S2": {"rotation": self._rotation_matrix_z(np.pi / 2), "traslation": np.array([1.0, -2.0, 0.5])},
+        }
+
+        for subject_id in self.subjects:
+            qrotation = rng.normal(size=(self.T, 4))
+            qrotation /= np.linalg.norm(qrotation, axis=1, keepdims=True)
+            np.savez(
+                os.path.join(self.params_dir, f"{subject_id}.npz"),
+                bvals=rng.normal(size=(self.T, self.N_COMPONENTS)),
+                translation=rng.normal(size=(self.T, 3)) * 5,
+                qrotation=qrotation,
+                scale=rng.uniform(0.8, 1.2, size=(self.T,)),
+            )
+        # a subject with b-values but no Procrustes transform: must be excluded
+        np.savez(
+            os.path.join(self.params_dir, "no_procrustes.npz"),
+            bvals=rng.normal(size=(self.T, self.N_COMPONENTS)),
+            translation=rng.normal(size=(self.T, 3)),
+            qrotation=np.tile([0.0, 0.0, 0.0, 1.0], (self.T, 1)),
+            scale=np.ones(self.T),
+        )
+
+        procrustes_path = os.path.join(self.params_dir, "procrustes_transforms.pkl")
+        with open(procrustes_path, "wb") as f:
+            pickle.dump(self.subjects, f)
+        self.procrustes_path = procrustes_path
+
+    @staticmethod
+    def _rotation_matrix_z(theta):
+        c, s = np.cos(theta), np.sin(theta)
+        return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+    def _make_dataset(self, **kwargs):
+        with patch("data.DataModules.cardio_mesh_paths.get_pca_components", return_value=self.pca_components), \
+             patch("data.DataModules.cardio_mesh_paths.get_pca_mean", return_value=self.pca_mean):
+            return CardiacMeshFromBValuesDataset(
+                params_dir=self.params_dir,
+                partition="synthetic",
+                procrustes_transforms=self.procrustes_path,
+                **kwargs,
+            )
+
+    @staticmethod
+    def _decode_one(ds, idx):
+        """__getitem__ now returns raw per-subject params (see decode_batch's
+        docstring on CardiacMeshFromBValuesDataset) -- collate a batch of one
+        and run it through decode_batch, exactly like
+        CardiacMeshPopulationDM.on_after_batch_transfer does, then drop the
+        batch dim so these tests can keep comparing single-subject output."""
+        raw = ds[idx]
+        batch = {k: v.unsqueeze(0) for k, v in raw.items()}
+        decoded = ds.decode_batch(batch)
+        return EasyDict({k: (v[0] if v is not None else None) for k, v in decoded.items()})
+
+    def test_excludes_subjects_without_procrustes_transform(self):
+        ds = self._make_dataset()
+        self.assertEqual(sorted(ds.ids), ["S1", "S2"])
+
+    def test_len_matches_usable_subjects(self):
+        ds = self._make_dataset()
+        self.assertEqual(len(ds), 2)
+
+    def test_n_subj_limits_dataset(self):
+        ds = self._make_dataset(N_subj=1)
+        self.assertEqual(len(ds), 1)
+
+    def test_getitem_returns_raw_params_not_reconstructed_mesh(self):
+        """__getitem__ must be cheap/raw -- no PCA reconstruction, no Procrustes,
+        no disk I/O beyond what __init__ already preloaded."""
+        ds = self._make_dataset()
+        item = ds[0]
+        self.assertEqual(
+            set(item.keys()),
+            {"bvals", "translation", "qrotation", "scale", "proc_rotation", "proc_traslation"},
+        )
+        self.assertEqual(tuple(item["bvals"].shape), (self.T, self.N_COMPONENTS))
+
+    def test_output_shape_and_keys(self):
+        ds = self._make_dataset()
+        item = self._decode_one(ds, 0)
+        self.assertEqual(set(item.keys()), {"s_t", "time_avg_s", "d_content", "d_style"})
+        self.assertEqual(item.s_t.shape, (self.T, self.N_VERTS, 3))
+        self.assertEqual(item.time_avg_s.shape, (self.N_VERTS, 3))
+        self.assertEqual(item.d_content.shape, (self.T,))
+        self.assertIsNone(item.d_style)
+
+    def test_identity_procrustes_matches_raw_reconstruction(self):
+        """S1 has an identity Procrustes transform, so s_t must equal the raw
+        PCA + rigid reconstruction with no further change."""
+        from cardio_mesh.pdm_reconstruction import reconstruct_shapes_from_bvalues
+
+        ds = self._make_dataset()
+        idx = ds.ids.index("S1")
+        item = self._decode_one(ds, idx)
+
+        d = np.load(os.path.join(self.params_dir, "S1.npz"))
+        expected = reconstruct_shapes_from_bvalues(
+            d["bvals"], d["translation"], d["qrotation"], d["scale"],
+            self.pca_components, self.pca_mean,
+        )
+        np.testing.assert_allclose(item.s_t.numpy(), expected, atol=1e-4)
+
+    def test_nonidentity_procrustes_matches_manual_application(self):
+        """S2 has a real rotation+translation: verify decode_batch applies exactly
+        what cardio_mesh.procrustes.transform_mesh applies, frame by frame."""
+        from cardio_mesh.pdm_reconstruction import reconstruct_shapes_from_bvalues
+        from cardio_mesh.procrustes import transform_mesh
+
+        ds = self._make_dataset()
+        idx = ds.ids.index("S2")
+        item = self._decode_one(ds, idx)
+
+        d = np.load(os.path.join(self.params_dir, "S2.npz"))
+        raw = reconstruct_shapes_from_bvalues(
+            d["bvals"], d["translation"], d["qrotation"], d["scale"],
+            self.pca_components, self.pca_mean,
+        )
+        expected = np.stack([transform_mesh(raw[t], **self.subjects["S2"]) for t in range(self.T)])
+        np.testing.assert_allclose(item.s_t.numpy(), expected, atol=1e-4)
+
+    def test_phases_filter_selects_expected_frames(self):
+        """phases_filter=[1, 3] (1-indexed) must select b-values frames 0 and 2."""
+        ds_full = self._make_dataset()
+        ds_filtered = self._make_dataset(phases_filter=[1, 3])
+
+        idx = ds_full.ids.index("S1")
+        item_full = self._decode_one(ds_full, idx)
+        item_filtered = self._decode_one(ds_filtered, idx)
+
+        self.assertEqual(item_filtered.s_t.shape[0], 2)
+        np.testing.assert_allclose(item_filtered.s_t[0].numpy(), item_full.s_t[0].numpy(), atol=1e-4)
+        np.testing.assert_allclose(item_filtered.s_t[1].numpy(), item_full.s_t[2].numpy(), atol=1e-4)
+
+    def test_end_diastole_time_avg_is_first_frame(self):
+        ds = self._make_dataset(static_shape="end_diastole")
+        item = self._decode_one(ds, ds.ids.index("S1"))
+        np.testing.assert_allclose(item.time_avg_s.numpy(), item.s_t[0].numpy())
+        self.assertAlmostEqual(item.d_content[0].item(), 0.0, places=4)
+
+    def test_batched_decode_matches_per_subject_decode(self):
+        """decode_batch on a real multi-subject batch (as the DataLoader would
+        actually produce via default collation) must match decoding each
+        subject one at a time -- i.e. the batching itself introduces no
+        cross-subject leakage."""
+        ds = self._make_dataset()
+        from torch.utils.data import default_collate
+
+        batch = default_collate([ds[i] for i in range(len(ds))])
+        decoded_batch = ds.decode_batch(batch)
+
+        for i, sid in enumerate(ds.ids):
+            single = self._decode_one(ds, i)
+            np.testing.assert_allclose(decoded_batch["s_t"][i].numpy(), single.s_t.numpy(), atol=1e-4)
 
 
 if __name__ == "__main__":
