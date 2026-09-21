@@ -71,8 +71,18 @@ class CardiacMeshPopulation:
     pass
 
 
+_CLOSED_CHAMBER_MAP = {
+    "left_ventricle": "LV_closed", "LV": "LV_closed",
+    "right_ventricle": "RV_closed", "RV": "RV_closed",
+    "left_atrium": "LA_closed", "LA": "LA_closed",
+    "right_atrium": "RA_closed", "RA": "RA_closed",
+    "biventricle": "BV_closed", "BV": "BV_closed",
+    "aorta": "aorta",
+}
+
+
 def close_chamber(partition: str) -> tuple[str, ...]:
-    return _resolve_partition(partition)
+    return _resolve_partition(_CLOSED_CHAMBER_MAP.get(partition, partition))
 
 
 def load_full_heart_mesh(subject_id: str, timeframe: int = 1) -> Cardiac3DMesh:
@@ -93,6 +103,21 @@ def load_full_heart_mesh(subject_id: str, timeframe: int = 1) -> Cardiac3DMesh:
     vertices = np.load(mesh_path)
     faces = np.loadtxt(paths.get_fhm_faces_file(), delimiter=",", dtype=np.int64)
     subpart_id = np.array(paths.get_fhm_subpart_ids())
+    return Cardiac3DMesh(vertices, faces, subpart_id)
+
+
+def load_fhm_topology() -> Cardiac3DMesh:
+    """
+    Loads only the (subject-independent) topology of the full heart mesh -
+    faces and per-vertex partition labels - without reading any subject's
+    reconstructed mesh from disk. Vertex positions are a placeholder (zeros):
+    callers that need this topology to select per-partition faces (via
+    Cardiac3DMesh.__getitem__) only use `.f`/`.subpart_id`, never `.v`, from
+    the result.
+    """
+    faces = np.loadtxt(paths.get_fhm_faces_file(), delimiter=",", dtype=np.int64)
+    subpart_id = np.array(paths.get_fhm_subpart_ids())
+    vertices = np.zeros((len(subpart_id), 3))
     return Cardiac3DMesh(vertices, faces, subpart_id)
 
 

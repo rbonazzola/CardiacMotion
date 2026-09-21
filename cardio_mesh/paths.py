@@ -29,6 +29,17 @@ def get_mean_shape(partition: str):
     return _load_cached(f"mean_shape_{_cache_name(partition)}", prefer_npy=True)
 
 
+def get_pca_components(partition: str):
+    """(n_components, n_verts*3) PDM basis, pre-restricted to the decimated +
+    partitioned vertex set. See pdm_reconstruction.py."""
+    return _load_cached(f"pca_components_{_cache_name(partition)}", prefer_npy=True)
+
+
+def get_pca_mean(partition: str):
+    """(n_verts*3,) PDM mean shape, pre-restricted like get_pca_components."""
+    return _load_cached(f"pca_mean_{_cache_name(partition)}", prefer_npy=True)
+
+
 def get_procrustes_file(partition: str) -> str:
     return _cached_file(f"procrustes_transforms_{_cache_name(partition)}", ".pkl")
 
