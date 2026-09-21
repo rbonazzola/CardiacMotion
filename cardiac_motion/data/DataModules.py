@@ -5,6 +5,7 @@ import numpy as np
 import re
 import glob
 import pickle as pkl
+import h5py
 from easydict import EasyDict
 from typing import Optional, List, Union, Literal
 from copy import copy
@@ -261,9 +262,14 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         ):
 
         '''
-          params_dir: directory with one <subject_id>.npz per subject, holding
-            "bvals" (T, n_components), "translation" (T, 3), "qrotation" (T, 4)
-            and "scale" (T,).
+          params_dir: EITHER a directory with one <subject_id>.npz per subject
+            (holding "bvals" (T, n_components), "translation" (T, 3),
+            "qrotation" (T, 4) and "scale" (T,)), OR the path to a single
+            consolidated .h5/.hdf5 file with the same fields as top-level
+            datasets of shape (N, T, ...) plus a "subject_ids" (N,) string
+            dataset (see scripts/maintenance/npz_to_hdf5.py) -- avoids one
+            filesystem open per subject, ~95,950 of them for the full
+            cohort (~66s sequential vs. a handful of seconds for one file).
           partition: which cached, pre-decimated PCA basis to reconstruct into
             (see cardio_mesh.paths.get_pca_components / get_pca_mean).
           procrustes_transforms: Mapping from IDs to transforms ("rotation" and "traslation"),
@@ -286,7 +292,19 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         with open(procrustes_transforms, "rb") as f:
             all_procrustes_transforms = pkl.load(f)
 
-        available_ids = {f[:-len(".npz")] for f in os.listdir(self._params_dir) if f.endswith(".npz")}
+        self._is_hdf5 = os.path.isfile(self._params_dir) and self._params_dir.endswith((".h5", ".hdf5"))
+
+        if self._is_hdf5:
+            with h5py.File(self._params_dir, "r") as hf:
+                raw_ids = hf["subject_ids"][:]
+            hdf5_id_to_row = {
+                (sid.decode("utf-8") if isinstance(sid, bytes) else sid): i
+                for i, sid in enumerate(raw_ids) if len(sid) > 0
+            }
+            available_ids = set(hdf5_id_to_row.keys())
+        else:
+            available_ids = {f[:-len(".npz")] for f in os.listdir(self._params_dir) if f.endswith(".npz")}
+
         self.ids = sorted(available_ids.intersection(all_procrustes_transforms.keys()))
         if N_subj is not None:
             self.ids = self.ids[:N_subj]
@@ -297,35 +315,62 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
 
         frame_idx = None
         if phases_filter is not None:
-            # frames in the .npz are 0-indexed; phases_filter follows the 1-indexed
-            # convention used by CardiacMeshPopulationDataset's filename regex.
+            # frames in the .npz/.h5 are 0-indexed; phases_filter follows the
+            # 1-indexed convention used by CardiacMeshPopulationDataset's
+            # filename regex.
             frame_idx = [phase - 1 for phase in phases_filter]
 
         logger.info("Preloading b-values/pose for %d subjects into memory...", len(self.ids))
         load_start = time.perf_counter()
-        bvals_list, translation_list, qrotation_list, scale_list = [], [], [], []
-        rotation_list, traslation_list = [], []
-        for id in self.ids:
-            d = np.load(os.path.join(self._params_dir, f"{id}.npz"))
-            bvals, translation, qrotation, scale = d["bvals"], d["translation"], d["qrotation"], d["scale"]
-            if frame_idx is not None:
-                bvals, translation, qrotation, scale = (
-                    bvals[frame_idx], translation[frame_idx], qrotation[frame_idx], scale[frame_idx]
-                )
-            bvals_list.append(bvals)
-            translation_list.append(translation)
-            qrotation_list.append(qrotation)
-            scale_list.append(scale)
-            pr = all_procrustes_transforms[id]
-            rotation_list.append(pr["rotation"])
-            traslation_list.append(pr["traslation"])
 
-        self.bvals = Tensor(np.stack(bvals_list))              # (N, T, n_components)
-        self.translation = Tensor(np.stack(translation_list))  # (N, T, 3)
-        self.qrotation = Tensor(np.stack(qrotation_list))      # (N, T, 4)
-        self.scale = Tensor(np.stack(scale_list))               # (N, T)
-        self.proc_rotation = Tensor(np.stack(rotation_list))    # (N, 3, 3)
-        self.proc_traslation = Tensor(np.stack(traslation_list))  # (N, 3), from the Procrustes pkl
+        if self._is_hdf5:
+            # self.ids is sorted the same way rows were written (both are
+            # sorted subject-id order), so this index array is guaranteed
+            # increasing -- a single efficient fancy-indexed read per field,
+            # instead of one np.load() per subject.
+            rows = [hdf5_id_to_row[id] for id in self.ids]
+            with h5py.File(self._params_dir, "r") as hf:
+                bvals_all = hf["bvals"][rows]
+                translation_all = hf["translation"][rows]
+                qrotation_all = hf["qrotation"][rows]
+                scale_all = hf["scale"][rows]
+            if frame_idx is not None:
+                bvals_all = bvals_all[:, frame_idx]
+                translation_all = translation_all[:, frame_idx]
+                qrotation_all = qrotation_all[:, frame_idx]
+                scale_all = scale_all[:, frame_idx]
+            self.bvals = Tensor(bvals_all)
+            self.translation = Tensor(translation_all)
+            self.qrotation = Tensor(qrotation_all)
+            self.scale = Tensor(scale_all)
+            rotation_list = [all_procrustes_transforms[id]["rotation"] for id in self.ids]
+            traslation_list = [all_procrustes_transforms[id]["traslation"] for id in self.ids]
+            self.proc_rotation = Tensor(np.stack(rotation_list))
+            self.proc_traslation = Tensor(np.stack(traslation_list))
+        else:
+            bvals_list, translation_list, qrotation_list, scale_list = [], [], [], []
+            rotation_list, traslation_list = [], []
+            for id in self.ids:
+                d = np.load(os.path.join(self._params_dir, f"{id}.npz"))
+                bvals, translation, qrotation, scale = d["bvals"], d["translation"], d["qrotation"], d["scale"]
+                if frame_idx is not None:
+                    bvals, translation, qrotation, scale = (
+                        bvals[frame_idx], translation[frame_idx], qrotation[frame_idx], scale[frame_idx]
+                    )
+                bvals_list.append(bvals)
+                translation_list.append(translation)
+                qrotation_list.append(qrotation)
+                scale_list.append(scale)
+                pr = all_procrustes_transforms[id]
+                rotation_list.append(pr["rotation"])
+                traslation_list.append(pr["traslation"])
+
+            self.bvals = Tensor(np.stack(bvals_list))              # (N, T, n_components)
+            self.translation = Tensor(np.stack(translation_list))  # (N, T, 3)
+            self.qrotation = Tensor(np.stack(qrotation_list))      # (N, T, 4)
+            self.scale = Tensor(np.stack(scale_list))               # (N, T)
+            self.proc_rotation = Tensor(np.stack(rotation_list))    # (N, 3, 3)
+            self.proc_traslation = Tensor(np.stack(traslation_list))  # (N, 3), from the Procrustes pkl
 
         logger.info(
             "B-values dataset indexed: subjects=%d, partition=%s, n_components=%d, n_verts=%d, "
