@@ -11,7 +11,7 @@ from .PhaseModule import PhaseTensor
 
 from easydict import EasyDict
 
-from .TemporalAggregators import FCN_Aggregator
+from .TemporalAggregators import FCN_Aggregator, TransformerAggregator
 
 from utils.helpers import (
     get_coma_args,
@@ -130,16 +130,35 @@ class AutoencoderTemporalSequence(nn.Module):
     
         x = cls.get_example_input_from_template(mesh_template, n_timeframes)
         h = encoder.forward_conv_stack(x, preserve_graph_structure=False)
-        
+
+        z_aggr_function_name = str(config.network_architecture.get("z_aggr_function", "fcn")).lower()
+        if z_aggr_function_name in {"fcn", "fully_connected"}:
+            z_aggr_function = FCN_Aggregator(features_in=n_timeframes * h.shape[-1], features_out=enc_config.latent_dim)
+        elif z_aggr_function_name == "transformer":
+            transformer_config = config.network_architecture.get("transformer", {})
+            z_aggr_function = TransformerAggregator(
+                features_in=h.shape[-1], features_out=enc_config.latent_dim, n_timeframes=n_timeframes,
+                d_model=transformer_config.get("d_model", 128),
+                n_heads=transformer_config.get("n_heads", 4),
+                n_layers=transformer_config.get("n_layers", 2),
+                d_ff=transformer_config.get("d_ff", 256),
+                dropout=transformer_config.get("dropout", 0.0),
+            )
+        else:
+            raise ValueError(f"Unrecognized z_aggr_function={z_aggr_function_name!r} (expected 'fcn' or 'transformer')")
+
         model = AutoencoderTemporalSequence(
             encoder = EncoderTemporalSequence(
                 encoder3d = encoder, 
-                z_aggr_function = FCN_Aggregator(features_in=n_timeframes * h.shape[-1], features_out=enc_config.latent_dim), 
+                z_aggr_function = z_aggr_function, 
                 is_variational=coma_args.is_variational
             ), 
             decoder = DecoderTemporalSequence(
                 decoder_content = DecoderContent.build_from_dictionary(coma_args),
-                decoder_style   = DecoderStyle.build_from_dictionary(coma_args, phase_embedding_method=phase_embedding_method, n_timeframes=n_timeframes),
+                decoder_style   = DecoderStyle.build_from_dictionary(
+                    coma_args, phase_embedding_method=phase_embedding_method, n_timeframes=n_timeframes,
+                    translation_head=bool(config.network_architecture.get("translation_head", False)),
+                ),
                 is_variational=coma_args.is_variational),
             is_variational=coma_args.is_variational
         )
@@ -259,7 +278,8 @@ class DecoderStyle(nn.Module):
 
     def __init__(self, decoder_config: dict, 
                  phase_embedding_method: PHASE_EMBEDDINGS = "exp", 
-                 n_timeframes: Union[int, None]=None):
+                 n_timeframes: Union[int, None]=None,
+                 translation_head: bool = False):
 
         super(DecoderStyle, self).__init__()
 
@@ -269,10 +289,23 @@ class DecoderStyle(nn.Module):
         self.phase_embedding = self._get_phase_embedding(phase_embedding_method, self.n_timeframes)
 
         decoder_config = copy(decoder_config)
-        decoder_config["latent_dim"] = decoder_config.pop("latent_dim_content") + 2 * decoder_config.pop("latent_dim_style")
+        combined_latent_dim = decoder_config.pop("latent_dim_content") + 2 * decoder_config.pop("latent_dim_style")
+        decoder_config["latent_dim"] = combined_latent_dim
         decoder_config["num_conv_filters_dec"] = decoder_config.pop("num_conv_filters_dec_s")
 
         self.decoder_3d = Decoder3DMesh(**decoder_config)
+
+        # Explicit per-frame rigid-translation output, added to the
+        # per-vertex mesh from decoder_3d -- gives the network a cheap,
+        # direct path for the (large, low-rank) global position of the
+        # mesh, instead of it having to emerge implicitly from a per-vertex
+        # graph-conv decoder with no notion of "shift everything together".
+        # Zero-initialized so it starts as a no-op (matches this codebase's
+        # existing near-zero-init convention for new output heads).
+        self.translation_head = torch.nn.Linear(combined_latent_dim, 3) if translation_head else None
+        if self.translation_head is not None:
+            torch.nn.init.zeros_(self.translation_head.weight)
+            torch.nn.init.zeros_(self.translation_head.bias)
 
 
     def  _get_phase_embedding(self, phase_embedding_method, n_timeframes):
@@ -298,6 +331,8 @@ class DecoderStyle(nn.Module):
         z_s_t = phased_z_s[:, t, ...]
         z = torch.cat([z_c, z_s_t], axis=-1)
         s_t = self.decoder_3d(z)
+        if self.translation_head is not None:
+            s_t = s_t + self.translation_head(z).unsqueeze(1)  # (B,V,3) + (B,1,3), broadcast over vertices
         s_t = s_t.unsqueeze(1)
         return s_t
 
@@ -313,9 +348,9 @@ class DecoderStyle(nn.Module):
     
 
     @classmethod
-    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes):
+    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes, translation_head=False):
         dec_config = {k: v for k, v in config_dict.items() if k in DECODER_S_ARGS}
-        return cls(dec_config, phase_embedding_method, n_timeframes)
+        return cls(dec_config, phase_embedding_method, n_timeframes, translation_head=translation_head)
       
             
 class DecoderTemporalSequence(nn.Module):

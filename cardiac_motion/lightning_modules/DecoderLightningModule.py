@@ -8,7 +8,6 @@ from PIL import Image
 import imageio
 
 from typing import List, Mapping
-from IPython import embed # uncomment for debugging
 from models.Model4D import  DecoderTemporalSequence
 from data.synthetic.SyntheticMeshPopulation import SyntheticMeshPopulation
 from image_helpers import *

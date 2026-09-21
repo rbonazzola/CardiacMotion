@@ -76,6 +76,31 @@ network_architecture_args = {
         "type": str,
         "action": ArgumentAction,
         "dest": "config.network_architecture.z_aggr_function"},
+    ("--transformer_d_model",): {
+        "help": "Hidden dimension of the transformer z_aggr_function (ignored unless --z_aggr_function transformer)",
+        "type": int,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.transformer.d_model"},
+    ("--transformer_n_heads",): {
+        "help": "Number of attention heads of the transformer z_aggr_function",
+        "type": int,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.transformer.n_heads"},
+    ("--transformer_n_layers",): {
+        "help": "Number of transformer encoder layers of the transformer z_aggr_function",
+        "type": int,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.transformer.n_layers"},
+    ("--transformer_d_ff",): {
+        "help": "Feed-forward hidden dimension of the transformer z_aggr_function",
+        "type": int,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.transformer.d_ff"},
+    ("--transformer_dropout",): {
+        "help": "Dropout of the transformer z_aggr_function",
+        "type": float,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.transformer.dropout"},
     ("--only_decoder",): {
         "help": "Flag to run only the decoder",
         "action": "store_true"},
@@ -102,8 +127,97 @@ loss_args = {
         "type": float,
         "action": ArgumentAction},
     ("--w_s",): {
-        "help": "weight of the \"style\" reconstruction term in the lost function",
+        "help": "weight of the \"style\" reconstruction term in the lost function "
+                "(the target/final value when --w_s_ramp_epochs > 0).",
         "dest": "config.loss.reconstruction_s.weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_s_start",): {
+        "help": "starting weight for the \"style\" term while content (recon_loss_c) hasn't "
+                "converged yet (default 0.1). Only takes effect when --w_s_ramp_epochs > 0.",
+        "dest": "config.loss.reconstruction_s.start_weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_s_ramp_epochs",): {
+        "help": "epochs over which w_s ramps linearly from --w_s_start to --w_s, "
+                "*starting once content has converged* (see --w_s_content_patience/"
+                "--w_s_content_min_delta), not from epoch 0. "
+                "0 (default) disables the ramp -- w_s is constant from epoch 0, matching prior behavior.",
+        "dest": "config.loss.reconstruction_s.ramp_epochs",
+        "type": int,
+        "action": ArgumentAction},
+    ("--w_s_content_patience",): {
+        "help": "epochs of val_recon_loss_c improving by less than --w_s_content_min_delta "
+                "(relative) before content is considered converged and the w_s ramp begins. "
+                "Only matters when --w_s_ramp_epochs > 0.",
+        "dest": "config.loss.reconstruction_s.content_patience",
+        "type": int,
+        "action": ArgumentAction},
+    ("--w_s_content_min_delta",): {
+        "help": "relative improvement in val_recon_loss_c (vs. its best-so-far value) below "
+                "which an epoch counts towards --w_s_content_patience. Only matters when "
+                "--w_s_ramp_epochs > 0.",
+        "dest": "config.loss.reconstruction_s.content_min_delta",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_translation",): {
+        "help": "weight of the rigid-translation component of recon_loss_s (per-frame centroid "
+                "MSE). Default 1.0, same as --w_shape -- together they reproduce plain recon_loss_s "
+                "exactly (the split is an exact decomposition, not an approximation). Raise this "
+                "relative to --w_shape to prioritize getting each frame's global position right.",
+        "dest": "config.loss.reconstruction_s.translation_weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_shape",): {
+        "help": "weight of the translation-invariant shape component of recon_loss_s (MSE after "
+                "centering both meshes on their own centroid). Default 1.0, see --w_translation.",
+        "dest": "config.loss.reconstruction_s.shape_weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_smooth",): {
+        "help": "target weight of the Laplacian smoothness regularizer on the reconstructed mesh "
+                "(penalizes each predicted vertex for deviating from its neighbors' average; "
+                "0 disables it, matching prior behavior).",
+        "dest": "config.loss.smoothness.weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_smooth_start",): {
+        "help": "starting weight for the smoothness term while style (recon_loss_s) hasn't "
+                "converged yet (default 0 -- no smoothing pressure until reconstruction itself "
+                "has stabilized). Only takes effect when --w_smooth_ramp_epochs > 0.",
+        "dest": "config.loss.smoothness.start_weight",
+        "type": float,
+        "action": ArgumentAction},
+    ("--w_smooth_ramp_epochs",): {
+        "help": "epochs over which w_smooth ramps linearly from --w_smooth_start to --w_smooth, "
+                "starting once style (recon_loss_s) has converged (see --w_smooth_style_patience/"
+                "--w_smooth_style_min_delta) -- i.e. smoothing only kicks in once the network has "
+                "learned to reconstruct the motion, so it polishes instead of fighting early "
+                "training. 0 (default) disables the ramp -- w_smooth is constant from epoch 0.",
+        "dest": "config.loss.smoothness.ramp_epochs",
+        "type": int,
+        "action": ArgumentAction},
+    ("--w_smooth_style_patience",): {
+        "help": "epochs of val_recon_loss_s improving by less than --w_smooth_style_min_delta "
+                "(relative) before style is considered converged and the w_smooth ramp begins. "
+                "Only matters when --w_smooth_ramp_epochs > 0.",
+        "dest": "config.loss.smoothness.style_patience",
+        "type": int,
+        "action": ArgumentAction},
+    ("--w_smooth_style_min_delta",): {
+        "help": "relative improvement in val_recon_loss_s (vs. its best-so-far value) below "
+                "which an epoch counts towards --w_smooth_style_patience. Only matters when "
+                "--w_smooth_ramp_epochs > 0.",
+        "dest": "config.loss.smoothness.style_min_delta",
+        "type": float,
+        "action": ArgumentAction},
+    ("--smooth_mask_percentile",): {
+        "help": "excludes the roughest (100 - this)%% of vertices in the population TEMPLATE's "
+                "own Laplacian magnitude from the smoothness penalty -- e.g. 90 skips the "
+                "roughest 10%% (partition cut boundaries, valve annuli, etc. that are genuinely "
+                "not smooth in real anatomy) so the regularizer doesn't fight them. "
+                "100 (default) masks nothing -- every vertex is penalized.",
+        "dest": "config.loss.smoothness.mask_percentile",
         "type": float,
         "action": ArgumentAction},
 }

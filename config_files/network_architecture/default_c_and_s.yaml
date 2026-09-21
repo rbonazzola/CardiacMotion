@@ -4,6 +4,13 @@
   latent_dim_s: 4,
   n_features: 3,
   z_aggr_function: "FCN",
+  transformer: {
+    d_model: 128,
+    n_heads: 4,
+    n_layers: 2,
+    d_ff: 256,
+    dropout: 0.0,
+  },
   convolution: { 
     channels_enc: 16 16 32 32,
     channels_dec_c: 16 16 32 32,

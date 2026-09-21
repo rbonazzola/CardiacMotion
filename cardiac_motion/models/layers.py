@@ -8,7 +8,6 @@ from torch_geometric.utils import remove_self_loops
 import shlex
 # import sys; sys.path.append(".")
 
-from IPython import embed
 from .utils import normal
 
 __author__ = ['Priyanka Patel', 'Rodrigo Bonazzola']

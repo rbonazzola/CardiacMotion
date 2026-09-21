@@ -25,12 +25,155 @@ def mse(s1, s2=None):
     return ((s1-s2)**2).sum(-1).mean(-1)
 
 
+def translation_shape_split_loss(rec_loss_fn, real, recon):
+    """
+    Splits a reconstruction MSE into a per-frame rigid-translation term and a
+    shape (translation-invariant) term. real/recon: (..., V, 3).
+
+    Exact decomposition: since real-recon = (shape_real-shape_recon) +
+    (centroid_real-centroid_recon) and the shape residual sums to zero over
+    V by construction, the cross term vanishes and
+    rec_loss_fn(real, recon) == rec_loss_fn(centroid_real, centroid_recon) +
+    rec_loss_fn(shape_real, shape_recon) exactly -- so translation_weight=
+    shape_weight=1 reproduces the plain MSE precisely; weighting them
+    differently gives translation error its own gradient signal instead of
+    it competing, diluted, inside one flat per-vertex MSE.
+    """
+    centroid_real = real.mean(dim=-2, keepdim=True)
+    centroid_recon = recon.mean(dim=-2, keepdim=True)
+    loss_translation = rec_loss_fn(centroid_real, centroid_recon)
+    loss_shape = rec_loss_fn(real - centroid_real, recon - centroid_recon)
+    return loss_translation, loss_shape
+
+
 def safe_mean_ratio(numerator, denominator):
     eps = torch.finfo(denominator.dtype).eps
     valid = denominator.abs() > eps
     if not valid.any():
         return torch.tensor(float("nan"), device=numerator.device, dtype=numerator.dtype)
     return (numerator[valid] / denominator[valid]).mean()
+
+
+def build_laplacian(faces: np.ndarray, n_verts: int) -> torch.Tensor:
+    """
+    Row-stochastic graph Laplacian L = I - A from mesh faces, sparse (n_verts,
+    n_verts): (L @ v)[i] = v[i] - mean(neighbors(v)[i]). Same convention as the
+    Laplacian smoothing already used elsewhere in this project's pipeline
+    (CardiacSegmentation's mesh_render_utils._laplacian_operator), rebuilt here
+    as a torch sparse tensor so it's usable inside the training loop.
+    """
+    edges = set()
+    for f in faces:
+        a, b, c = int(f[0]), int(f[1]), int(f[2])
+        edges.update({(a, b), (b, a), (b, c), (c, b), (c, a), (a, c)})
+    edges = np.array(sorted(edges), dtype=np.int64)
+    row, col = edges[:, 0], edges[:, 1]
+
+    deg = np.bincount(row, minlength=n_verts).astype(np.float64)
+    deg[deg == 0] = 1.0  # isolated vertices (shouldn't occur post close_chamber fix): no-op row
+    vals = (1.0 / deg[row]).astype(np.float32)
+
+    idx_a = torch.tensor(np.stack([row, col]), dtype=torch.long)
+    A = torch.sparse_coo_tensor(idx_a, torch.from_numpy(vals), (n_verts, n_verts))
+
+    diag = torch.arange(n_verts, dtype=torch.long)
+    idx_i = torch.stack([diag, diag])
+    I = torch.sparse_coo_tensor(idx_i, torch.ones(n_verts, dtype=torch.float32), (n_verts, n_verts))
+
+    return (I - A).coalesce()
+
+
+def laplacian_penalty(x: torch.Tensor, L: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    """
+    Mean squared Laplacian magnitude of a batch of meshes -- penalizes each
+    vertex for sitting away from its neighbors' average, independent of the
+    mesh's absolute position/error. x: (B, T, V, 3). L: sparse (V, V).
+
+    mask: optional (V,) float tensor, 1.0 = penalize this vertex, 0.0 = don't
+    (see build_smoothness_mask). Reduction is the mean over only the
+    masked-in (vertex, batch, frame) entries, so the loss stays on a
+    comparable scale regardless of how much of the mesh is masked out.
+    """
+    B, T, V, C = x.shape
+    flat = x.reshape(B * T, V, C).permute(1, 0, 2).reshape(V, B * T * C)
+    # torch.sparse.mm has no CUDA kernel for float16, so under mixed
+    # precision (autocast) this would otherwise crash -- upcast just for
+    # this matmul, then cast the result back.
+    if flat.dtype == torch.float16:
+        lap = torch.sparse.mm(L.float(), flat.float()).to(torch.float16)
+    else:
+        lap = torch.sparse.mm(L, flat)
+    lap = lap.reshape(V, B * T, C).permute(1, 0, 2)  # (B*T, V, C)
+    sq = (lap ** 2).sum(-1)  # (B*T, V)
+    if mask is None:
+        return sq.mean()
+    sq = sq * mask.unsqueeze(0)
+    denom = mask.sum() * sq.shape[0]
+    return sq.sum() / denom.clamp(min=1.0)
+
+
+def build_smoothness_mask(template_v: np.ndarray, L: torch.Tensor, percentile: float = 100.0) -> torch.Tensor:
+    """
+    Per-vertex mask (1.0 = apply the smoothness penalty there, 0.0 = skip),
+    computed from the population TEMPLATE's own Laplacian magnitude -- not
+    from any single reconstruction. Some regions of the real anatomy aren't
+    smooth by construction (partition cut boundaries -- e.g. the aorta's open
+    end -- valve annuli, etc.); penalizing the network for matching that real
+    roughness would fight genuine anatomy instead of removing reconstruction
+    noise. percentile=100 (default) masks nothing -- every vertex is
+    penalized, matching behavior before this existed. percentile=90 excludes
+    the roughest 10% of *template* vertices (a fixed, structural set -- this
+    does not look at any particular subject's reconstruction).
+    """
+    if percentile >= 100.0:
+        return None
+    v = torch.as_tensor(template_v, dtype=torch.float32)
+    lap = torch.sparse.mm(L, v)  # (V, 3)
+    magnitude = lap.norm(dim=-1)  # (V,)
+    threshold = torch.quantile(magnitude, percentile / 100.0)
+    return (magnitude < threshold).float()
+
+
+class ConvergenceRamp:
+    """
+    Tracks a metric's plateau (same idea as ReduceLROnPlateau's patience
+    counter) and derives a value that sits at `start` until the tracked
+    metric has improved by less than `min_delta` (relative to its
+    best-so-far value) for `patience` consecutive epochs, then ramps
+    linearly from `start` to `target` over the following `ramp_epochs`
+    epochs. Latches once triggered -- doesn't un-trigger if the metric later
+    improves again. ramp_epochs<=0 disables all of this: value() always
+    returns `target`, matching plain constant-weight behavior.
+    """
+
+    def __init__(self, start: float, target: float, ramp_epochs: int, patience: int, min_delta: float):
+        self.start = start
+        self.target = target
+        self.ramp_epochs = ramp_epochs
+        self.patience = patience
+        self.min_delta = min_delta
+        self._best = float("inf")
+        self._plateau_epochs = 0
+        self._converged_at_epoch = None
+
+    def update(self, value: float, epoch: int):
+        if self.ramp_epochs <= 0 or self._converged_at_epoch is not None:
+            return
+        improvement = (self._best - value) / max(self._best, 1e-8)
+        if value < self._best:
+            self._best = value
+        self._plateau_epochs = self._plateau_epochs + 1 if improvement < self.min_delta else 0
+        if self._plateau_epochs >= self.patience:
+            self._converged_at_epoch = epoch
+
+    def value(self, epoch: int) -> float:
+        if self.ramp_epochs <= 0:
+            return self.target
+        if self._converged_at_epoch is None:
+            return self.start
+        progress = min(1.0, (epoch - self._converged_at_epoch) / self.ramp_epochs)
+        return self.start + (self.target - self.start) * progress
+
 
 class CoMA_Lightning(pl.LightningModule):
 
@@ -66,20 +209,63 @@ class CoMA_Lightning(pl.LightningModule):
 
         self.rec_loss = self.get_rec_loss()
 
+        self.laplacian = None
+        self.smooth_mask = None
+        if mesh_template is not None:
+            self.laplacian = build_laplacian(mesh_template.f, mesh_template.v.shape[0])
+            self.smooth_mask = build_smoothness_mask(mesh_template.v, self.laplacian, self.smooth_mask_percentile)
+
         self.train_outputs = []
         self.val_outputs = []
         self.test_outputs = []
         self.kl_warmup_epochs = getattr(self.loss_params.regularization, "warmup_epochs", 5)
         self._kl_warning_count = 0
 
+        # w_s ramps up once content (val_recon_loss_c) plateaus; w_smooth ramps
+        # up once style (val_recon_loss_s) plateaus -- i.e. smoothing only
+        # kicks in once reconstruction itself has stabilized, so it polishes
+        # instead of fighting the network while it's still learning shape/motion.
+        self._w_s_ramp = ConvergenceRamp(
+            self.w_s_start, self.w_s, self.w_s_ramp_epochs, self.w_s_content_patience, self.w_s_content_min_delta,
+        )
+        self._w_smooth_ramp = ConvergenceRamp(
+            self.w_smooth_start, self.w_smooth, self.w_smooth_ramp_epochs,
+            self.w_smooth_style_patience, self.w_smooth_style_min_delta,
+        )
+
 
     def get_rec_loss(self):
 
         self.w_s = self.loss_params.reconstruction_s.weight
+        self.w_s_start = getattr(self.loss_params.reconstruction_s, "start_weight", self.w_s)
+        self.w_s_ramp_epochs = getattr(self.loss_params.reconstruction_s, "ramp_epochs", 0)
+        self.w_s_content_patience = getattr(self.loss_params.reconstruction_s, "content_patience", 5)
+        self.w_s_content_min_delta = getattr(self.loss_params.reconstruction_s, "content_min_delta", 0.02)
+        # Splitting recon_loss_s into translation + shape (see
+        # translation_shape_split_loss): defaults of 1/1 reproduce the plain
+        # MSE exactly; raise translation_weight to prioritize getting the
+        # per-frame rigid position right (found to dominate the raw error).
+        self.w_translation = getattr(self.loss_params.reconstruction_s, "translation_weight", 1.0)
+        self.w_shape = getattr(self.loss_params.reconstruction_s, "shape_weight", 1.0)
         self.w_kl = self.loss_params.regularization.weight
+
+        smoothness = getattr(self.loss_params, "smoothness", None)
+        self.w_smooth = smoothness.weight if smoothness is not None else 0.0
+        self.w_smooth_start = getattr(smoothness, "start_weight", self.w_smooth) if smoothness is not None else 0.0
+        self.w_smooth_ramp_epochs = getattr(smoothness, "ramp_epochs", 0) if smoothness is not None else 0
+        self.w_smooth_style_patience = getattr(smoothness, "style_patience", 5) if smoothness is not None else 5
+        self.w_smooth_style_min_delta = getattr(smoothness, "style_min_delta", 0.02) if smoothness is not None else 0.02
+        self.smooth_mask_percentile = getattr(smoothness, "mask_percentile", 100.0) if smoothness is not None else 100.0
+
         return losses_menu[self.loss_params.reconstruction_c.type.lower()]
 
-            
+
+    def _recon_loss_s_split(self, s_t, shat_t):
+        loss_translation, loss_shape = translation_shape_split_loss(self.rec_loss, s_t, shat_t)
+        recon_loss_s = self.w_translation * loss_translation + self.w_shape * loss_shape
+        return recon_loss_s, loss_translation, loss_shape
+
+
     def KL_div(self, mu, log_var):
         log_var_has_nonfinite = not torch.isfinite(log_var).all().item()
         log_var_was_clamped = ((log_var < LOG_VAR_MIN).any() or (log_var > LOG_VAR_MAX).any()).item()
@@ -123,6 +309,34 @@ class CoMA_Lightning(pl.LightningModule):
             return 0.0
         return self.w_kl
 
+    def _effective_w_s(self):
+        return self._w_s_ramp.value(self.current_epoch)
+
+    def _effective_w_smooth(self):
+        return self._w_smooth_ramp.value(self.current_epoch)
+
+    def _update_ramps(self, val_recon_loss_c: float, val_recon_loss_s: float):
+        """Called once per (non-sanity-check) validation epoch. w_s watches
+        content (recon_loss_c); w_smooth watches style (recon_loss_s) -- so
+        smoothing only ramps up once the network has actually learned to
+        reconstruct the motion, not while it's still fighting for accuracy."""
+        was_s_converged = self._w_s_ramp._converged_at_epoch is not None
+        was_smooth_converged = self._w_smooth_ramp._converged_at_epoch is not None
+
+        self._w_s_ramp.update(val_recon_loss_c, self.current_epoch)
+        self._w_smooth_ramp.update(val_recon_loss_s, self.current_epoch)
+
+        if not was_s_converged and self._w_s_ramp._converged_at_epoch is not None:
+            logger.info(
+                "Content (recon_loss_c) considered converged at epoch %d -- starting w_s ramp %.3f -> %.3f over %d epochs.",
+                self.current_epoch, self._w_s_ramp.start, self._w_s_ramp.target, self._w_s_ramp.ramp_epochs,
+            )
+        if not was_smooth_converged and self._w_smooth_ramp._converged_at_epoch is not None:
+            logger.info(
+                "Style (recon_loss_s) considered converged at epoch %d -- starting w_smooth ramp %.3f -> %.3f over %d epochs.",
+                self.current_epoch, self._w_smooth_ramp.start, self._w_smooth_ramp.target, self._w_smooth_ramp.ramp_epochs,
+            )
+
     
     def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
         return self.model(input, **kwargs)
@@ -143,6 +357,11 @@ class CoMA_Lightning(pl.LightningModule):
             self.model.encoder.matrices['A_edge_index'][i] = self.model.encoder.matrices['A_edge_index'][i].to(self.device)
             self.model.encoder.matrices['A_norm'][i] = self.model.encoder.matrices['A_norm'][i].to(self.device)
 
+        if self.laplacian is not None:
+            self.laplacian = self.laplacian.to(self.device)
+        if self.smooth_mask is not None:
+            self.smooth_mask = self.smooth_mask.to(self.device)
+
         # embed()
         # self.precision_to_set  = self.trainer.precision
         # self.batch_size_to_set = self.trainer.train_dataloader.batch_size
@@ -161,9 +380,11 @@ class CoMA_Lightning(pl.LightningModule):
         # print(f"{bottleneck.mu.mean()=}\n\n{time_avg_shat.mean()=}\n\n{shat_t.mean()=}")
         
         recon_loss_c = self.rec_loss(time_avg_s, time_avg_shat)
-        recon_loss_s = self.rec_loss(s_t, shat_t)
+        recon_loss_s, recon_loss_s_translation, recon_loss_s_shape = self._recon_loss_s_split(s_t, shat_t)
 
-        recon_loss = recon_loss_c + self.w_s * recon_loss_s
+        effective_w_s = self._effective_w_s()
+        self.log("w_s_effective", effective_w_s, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        recon_loss = recon_loss_c + effective_w_s * recon_loss_s
 
         if self._is_variational():
             bottleneck = self.model.decoder._partition_z(bottleneck["mu"], bottleneck["log_var"])            
@@ -178,7 +399,11 @@ class CoMA_Lightning(pl.LightningModule):
 
         kld_loss = kld_loss_c + kld_loss_s
 
-        train_loss = recon_loss + self._effective_w_kl() * kld_loss
+        smooth_loss = laplacian_penalty(shat_t, self.laplacian, self.smooth_mask) if self.laplacian is not None else torch.zeros_like(recon_loss)
+
+        effective_w_smooth = self._effective_w_smooth()
+        self.log("w_smooth_effective", effective_w_smooth, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        train_loss = recon_loss + self._effective_w_kl() * kld_loss + effective_w_smooth * smooth_loss
         
         # print(f"{recon_loss_c.item()=} + {recon_loss_s.item()=}")
         # print(f"{train_loss.item()=} = {recon_loss.item()=} + {self.w_kl} * {kld_loss.item()=}")
@@ -188,6 +413,9 @@ class CoMA_Lightning(pl.LightningModule):
            "training_recon_loss": recon_loss,
            "training_recon_loss_c": recon_loss_c,
            "training_recon_loss_s": recon_loss_s,
+           "training_recon_loss_s_translation": recon_loss_s_translation,
+           "training_recon_loss_s_shape": recon_loss_s_shape,
+           "training_smooth_loss": smooth_loss,
            "loss": train_loss
         }
 
@@ -205,7 +433,10 @@ class CoMA_Lightning(pl.LightningModule):
         avg_kld_loss = torch.stack([x["training_kld_loss"] for x in self.train_outputs]).mean()
         avg_recon_loss_c = torch.stack([x["training_recon_loss_c"] for x in self.train_outputs]).mean()
         avg_recon_loss_s = torch.stack([x["training_recon_loss_s"] for x in self.train_outputs]).mean()
+        avg_recon_loss_s_translation = torch.stack([x["training_recon_loss_s_translation"] for x in self.train_outputs]).mean()
+        avg_recon_loss_s_shape = torch.stack([x["training_recon_loss_s_shape"] for x in self.train_outputs]).mean()
         avg_recon_loss = torch.stack([x["training_recon_loss"] for x in self.train_outputs]).mean()
+        avg_smooth_loss = torch.stack([x["training_smooth_loss"] for x in self.train_outputs]).mean()
         avg_loss = torch.stack([x["loss"] for x in self.train_outputs]).mean()
 
         self.log_dict({
@@ -213,6 +444,9 @@ class CoMA_Lightning(pl.LightningModule):
             "training_recon_loss": avg_recon_loss,
             "training_recon_loss_c": avg_recon_loss_c,
             "training_recon_loss_s": avg_recon_loss_s,
+            "training_recon_loss_s_translation": avg_recon_loss_s_translation,
+            "training_recon_loss_s_shape": avg_recon_loss_s_shape,
+            "training_smooth_loss": avg_smooth_loss,
             "training_loss": avg_loss
           },
           # on_epoch=False,
@@ -261,8 +495,10 @@ class CoMA_Lightning(pl.LightningModule):
 
         # content
         recon_loss_c = self.rec_loss(time_avg_s, time_avg_s_hat)
-        recon_loss_s = self.rec_loss(s_t, shat_t)
-        recon_loss = recon_loss_c + self.w_s * recon_loss_s
+        recon_loss_s, _, _ = self._recon_loss_s_split(s_t, shat_t)
+        recon_loss = recon_loss_c + self._effective_w_s() * recon_loss_s
+
+        smooth_loss = laplacian_penalty(shat_t, self.laplacian, self.smooth_mask) if self.laplacian is not None else torch.zeros_like(recon_loss)
 
         if self._is_variational():
             
@@ -276,10 +512,10 @@ class CoMA_Lightning(pl.LightningModule):
             kld_loss_c = self.KL_div(self.mu_c, self.log_var_c)
             kld_loss_s = self.KL_div(self.mu_s, self.log_var_s)
             kld_loss = kld_loss_c + kld_loss_s
-            loss = recon_loss + self._effective_w_kl() * kld_loss
+            loss = recon_loss + self._effective_w_kl() * kld_loss + self._effective_w_smooth() * smooth_loss
         else:
-            loss = recon_loss
-            kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(loss)
+            kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(recon_loss)
+            loss = recon_loss + self._effective_w_smooth() * smooth_loss
 
         recon_error = mse(s_t, shat_t)
 
@@ -294,7 +530,7 @@ class CoMA_Lightning(pl.LightningModule):
             rec_ratio_to_pop_mean = torch.tensor(float("nan"))
                
         return loss,\
-               recon_loss, recon_loss_c, recon_loss_s,\
+               recon_loss, recon_loss_c, recon_loss_s, smooth_loss,\
                kld_loss_c, kld_loss_s, kld_loss,\
                rec_ratio_to_time_mean,\
                rec_ratio_to_pop_mean,\
@@ -306,13 +542,14 @@ class CoMA_Lightning(pl.LightningModule):
         # loss_dict = self._shared_eval_step(batch, batch_idx)
         # loss_dict = { "val_"+k: v for k, v in loss_dict.items() }
 
-        loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
+        loss, recon_loss, recon_loss_c, recon_loss_s, smooth_loss, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
 
         loss_dict = {
           "val_kld_loss": kld_loss,
           "val_recon_loss": recon_loss,
           "val_recon_loss_c": recon_loss_c,
           "val_recon_loss_s": recon_loss_s,
+          "val_smooth_loss": smooth_loss,
           "val_loss": loss,
           "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
@@ -332,17 +569,21 @@ class CoMA_Lightning(pl.LightningModule):
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in self.val_outputs]).mean()
         avg_recon_loss_c = torch.stack([x["val_recon_loss_c"] for x in self.val_outputs]).mean()
         avg_recon_loss_s = torch.stack([x["val_recon_loss_s"] for x in self.val_outputs]).mean()
+        avg_smooth_loss = torch.stack([x["val_smooth_loss"] for x in self.val_outputs]).mean()
         avg_loss = torch.stack([x["val_loss"] for x in self.val_outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in self.val_outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in self.val_outputs]).mean()
         rec_ratio_to_pop_mean_c = torch.stack([x["val_rec_ratio_to_pop_mean_c"] for x in self.val_outputs]).mean()
-        
+
+        if not self.trainer.sanity_checking:
+            self._update_ramps(avg_recon_loss_c.item(), avg_recon_loss_s.item())
 
         self.log_dict({
             "val_kld_loss": avg_kld_loss, 
             "val_recon_loss": avg_recon_loss,
             "val_recon_loss_c": avg_recon_loss_c,
             "val_recon_loss_s": avg_recon_loss_s,
+            "val_smooth_loss": avg_smooth_loss,
             "val_loss": avg_loss,
             "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
             "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
@@ -362,13 +603,14 @@ class CoMA_Lightning(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
                 
-        loss, recon_loss, recon_loss_c, recon_loss_s, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
+        loss, recon_loss, recon_loss_c, recon_loss_s, smooth_loss, kld_loss_c, kld_loss_s, kld_loss, rec_ratio_to_time_mean, rec_ratio_to_pop_mean, rec_ratio_to_pop_mean_c = self._shared_eval_step(batch, batch_idx)
 
         loss_dict = {
           "test_kld_loss": kld_loss, 
           "test_recon_loss": recon_loss,
           "test_recon_loss_c": recon_loss_c,
           "test_recon_loss_s": recon_loss_s,
+          "test_smooth_loss": smooth_loss,
           "test_loss": loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
@@ -386,6 +628,7 @@ class CoMA_Lightning(pl.LightningModule):
         avg_recon_loss = torch.stack([x["test_recon_loss"] for x in self.test_outputs]).mean()
         avg_recon_loss_c = torch.stack([x["test_recon_loss_c"] for x in self.test_outputs]).mean()
         avg_recon_loss_s = torch.stack([x["test_recon_loss_s"] for x in self.test_outputs]).mean()
+        avg_smooth_loss = torch.stack([x["test_smooth_loss"] for x in self.test_outputs]).mean()
         avg_loss = torch.stack([x["test_loss"] for x in self.test_outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in self.test_outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in self.test_outputs]).mean()
@@ -396,6 +639,7 @@ class CoMA_Lightning(pl.LightningModule):
           "test_recon_loss": avg_recon_loss,
           "test_recon_loss_c": avg_recon_loss_c,
           "test_recon_loss_s": avg_recon_loss_s,
+          "test_smooth_loss": avg_smooth_loss,
           "test_loss": avg_loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,

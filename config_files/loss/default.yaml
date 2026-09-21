@@ -5,9 +5,25 @@
   },
   reconstruction_s: {
     type: "MSE",
-    weight: 0.1  },
+    weight: 1,
+    start_weight: 0.1,
+    ramp_epochs: 0,
+    content_patience: 5,
+    content_min_delta: 0.02,
+    translation_weight: 1,
+    shape_weight: 1
+  },
   regularization: {
     type: "KL",
     weight: 1
+  },
+  smoothness: {
+    type: "laplacian",
+    weight: 0,
+    start_weight: 0,
+    ramp_epochs: 0,
+    style_patience: 5,
+    style_min_delta: 0.02,
+    mask_percentile: 100
   }
 }

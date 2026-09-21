@@ -6,7 +6,6 @@ from PIL import Image
 import imageio
 import numpy as np
 
-from IPython import embed # uncomment for debugging
 # from models.Model4D import  EncoderTemporalSequence
 
 losses_menu = {

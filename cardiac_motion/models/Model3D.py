@@ -6,7 +6,6 @@ from .layers import ChebConv_Coma, Pool
 
 from copy import copy
 from typing import Sequence, Union, List
-from IPython import embed # left there for debugging if needed
 
 #TODO: Implement common parent class for encoder and decoder (GraphConvStack?), to capture common behaviour.
 
@@ -314,9 +313,16 @@ class Decoder3DMesh(nn.Module):
         self.batch_normalization = batch_normalization
 
         self.matrices = {}
+        # Each decoder layer upsamples *then* graph-convolves, so layer i's
+        # ChebConv needs the adjacency at the resolution produced by
+        # upsample[i], not the pre-upsample one -- drop the coarsest (index
+        # 0 pre-reversal / never reached post-upsample) entry accordingly.
+        # Pre-existing off-by-one (silently tolerated by propagate(), which
+        # infers node count from edge_index rather than requiring an exact
+        # size match), not introduced by any later change to this class.
         A_edge_index, A_norm = self._build_adj_matrix(adjacency_matrices)
-        self.matrices["A_edge_index"] = list(reversed(A_edge_index))
-        self.matrices["A_norm"] = list(reversed(A_norm))
+        self.matrices["A_edge_index"] = list(reversed(A_edge_index))[1:]
+        self.matrices["A_norm"] = list(reversed(A_norm))[1:]
         self.matrices["upsample"] = list(reversed(upsample_matrices))
 
         self._n_features_before_z = self.matrices["upsample"][0].shape[1] * self.filters_dec[0]
