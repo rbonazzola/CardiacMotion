@@ -15,8 +15,10 @@ def get_mlflow_parameters(config):
 
     loss_params = {
         "w_kl": loss.regularization.weight,
-        "w_s": loss.reconstruction_s.weight
+        "w_s": loss.reconstruction_s.weight,
+        "w_smooth": getattr(getattr(loss, "smoothness", None), "weight", None),
     }
+    transformer_cfg = net.get("transformer", {}) if hasattr(net, "get") else {}
     net_params = {
         "latent_dim_s": net.latent_dim_s,
         "latent_dim_c": net.latent_dim_c,
@@ -26,11 +28,23 @@ def get_mlflow_parameters(config):
         "n_channels_dec_c": net.convolution.channels_dec_c,
         "n_channels_dec_s": net.convolution.channels_dec_s,
         "reduction_factors": net.pooling.parameters.downsampling_factors,
-        "phase_input": net.phase_input
+        "phase_input": net.phase_input,
+        "translation_head": getattr(net, "translation_head", False),
+        # only meaningful when z_aggr_function=transformer; None/missing for fcn runs
+        "transformer_n_layers": transformer_cfg.get("n_layers", None),
+        "transformer_d_model": transformer_cfg.get("d_model", None),
+        "transformer_n_heads": transformer_cfg.get("n_heads", None),
+        "transformer_d_ff": transformer_cfg.get("d_ff", None),
+        "transformer_dropout": transformer_cfg.get("dropout", None),
+        "encoder_n_timeframes": getattr(net, "encoder_n_timeframes", None),
     }
 
     mlflow_parameters = {
         "platform": check_output(["hostname"]).strip().decode(),
+        "seed": getattr(config, "seed", None),
+        "batch_size": getattr(config, "batch_size", None),
+        "batch_size_schedule": getattr(config, "batch_size_schedule", None),
+        "n_timeframes": getattr(config, "n_timeframes", None),
         **loss_params,
         **net_params,
     }
@@ -148,19 +162,20 @@ def _local_artifact_path(artifact_location):
     return Path(artifact_location)
 
 
-def mlflow_startup(mlflow_config):
-    
+def mlflow_startup(mlflow_config, tags=None):
+
     '''
-      Starts MLflow run      
-      mlflow_config: Namespace including run_id, experiment_name, run_name, artifact_location            
-    
+      Starts MLflow run
+      mlflow_config: Namespace including run_id, experiment_name, run_name, artifact_location
+      tags: optional dict of extra tags to set at run creation (e.g. from
+        --additional_mlflow_tags) -- lets sweeps tag/filter their own runs.
     '''
-    
+
     mlflow.pytorch.autolog(log_models=getattr(mlflow_config, "log_models", False))
- 
+
     if mlflow_config.tracking_uri is not None:
         mlflow.set_tracking_uri(mlflow_config.tracking_uri)
-    
+
     try:
         mlflow_config.exp_id = mlflow.create_experiment(mlflow_config.experiment_name, artifact_location=mlflow_config.artifact_location)
     except:
@@ -174,7 +189,9 @@ def mlflow_startup(mlflow_config):
         "experiment_id": mlflow_config.exp_id,
         "run_name": mlflow_config.run_name,
     }
-    
+    if tags:
+        run_info["tags"] = tags
+
     mlflow.start_run(**run_info)
     
         
