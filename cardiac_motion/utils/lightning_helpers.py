@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import sys
 import time
 from urllib.parse import urlparse, unquote
 
@@ -89,7 +90,27 @@ from pytorch_lightning.loggers import MLFlowLogger
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.callbacks import RichModelSummary
 
-early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=10)
+def _loss_weights_are_final(pl_module):
+    # Modules without scheduled loss weights (no loss_weights_are_final) are always "final".
+    is_final = getattr(pl_module, "loss_weights_are_final", None)
+    return True if is_final is None else bool(is_final())
+
+
+class RampAwareEarlyStopping(EarlyStopping):
+    '''
+    EarlyStopping that ignores epochs where the loss weights are still ramping (w_s, w_smooth,
+    KL warm-up; see CoMA_Lightning.loss_weights_are_final). While the weights change, val_loss
+    rises just because e.g. w_s grows, which plain EarlyStopping mistakes for overfitting. The
+    patience counter and best score only start once the weights have reached their final values.
+    '''
+
+    def _run_early_stopping_check(self, trainer):
+        if not _loss_weights_are_final(trainer.lightning_module):
+            return
+        super()._run_early_stopping_check(trainer)
+
+
+early_stopping = RampAwareEarlyStopping(monitor="val_loss", mode="min", patience=10)
 
 
 class MLflowArtifactCheckpoint(ModelCheckpoint):
@@ -101,6 +122,10 @@ class MLflowArtifactCheckpoint(ModelCheckpoint):
     Without this, Lightning derives the directory from MLFlowLogger.save_dir, which is None
     unless the tracking URI starts with "file:" -- so checkpoints ended up in the cwd,
     as ./<experiment_id>/<run_id>/checkpoints/.
+
+    Like RampAwareEarlyStopping, top-k checkpoints are only considered once the loss weights have
+    reached their final values, so the best model is the best under the final objective. If
+    training ends before that, the last model is saved as a fallback.
     '''
 
     BEST_MODEL_LINK = "best_model.ckpt"
@@ -126,6 +151,22 @@ class MLflowArtifactCheckpoint(ModelCheckpoint):
             logger.warning("Artifact URI %s is not local; falling back to Lightning's default checkpoint dir.", artifact_uri)
             return None
         return os.path.join(unquote(parsed.path), "checkpoints")
+
+    def _save_topk_checkpoint(self, trainer, monitor_candidates):
+        if not _loss_weights_are_final(trainer.lightning_module):
+            return
+        super()._save_topk_checkpoint(trainer, monitor_candidates)
+
+    def on_train_end(self, trainer, pl_module):
+        super().on_train_end(trainer, pl_module)
+        if self.best_model_path or self.dirpath is None:
+            return
+        logger.warning("Training ended before the loss weights reached their final values: no "
+                       "checkpoint was selected on val_loss, saving the last model instead.")
+        monitor_candidates = self._monitor_candidates(trainer)
+        self.best_model_path = self.format_checkpoint_name(monitor_candidates)
+        self.best_model_score = monitor_candidates.get(self.monitor)
+        self._save_checkpoint(trainer, self.best_model_path)
 
     def _save_checkpoint(self, trainer, filepath):
         super()._save_checkpoint(trainer, filepath)
@@ -160,13 +201,64 @@ class MemoryUsageCallback(pl.Callback):
 
 
 class EpochMetricsTableCallback(pl.Callback):
-    def __init__(self, max_rows=20):
+    '''
+    Prints a table of per-epoch metrics. On an interactive terminal the table is redrawn in
+    place (rich.live.Live); otherwise (e.g. SLURM log files) a full table is printed each epoch.
+    '''
+
+    def __init__(self, max_rows=20, console=None):
         self.max_rows = max(1, int(max_rows))
         self.rows = []
         self.best_val_loss = None
         self.epoch_start_time = None
         self._last_logged_epoch = None
         self._last_printed_epoch = None
+        self._console = console
+        self._live = None
+        self._redirected_handlers = []
+
+    def on_fit_start(self, trainer, pl_module):
+        self._start_live()
+
+    def on_exception(self, trainer, pl_module, exception):
+        self._stop_live()
+
+    def _get_console(self):
+        if self._console is None:
+            from rich.console import Console
+            self._console = Console()
+        return self._console
+
+    def _start_live(self):
+        try:
+            from rich.live import Live
+        except ImportError:
+            return
+        console = self._get_console()
+        if self._live is not None or not console.is_terminal:
+            return
+        self._live = Live(console=console, auto_refresh=False, redirect_stdout=True, redirect_stderr=True)
+        self._live.start()
+        # Logging handlers keep a reference to the real stdout/stderr, bypassing Live's redirection:
+        # point them at the redirected streams so log lines are printed above the table instead of
+        # breaking it. Not only the root logger's: e.g. "lightning.pytorch" has its own handler.
+        loggers = [logging.getLogger()] + [
+            lg for lg in logging.Logger.manager.loggerDict.values() if isinstance(lg, logging.Logger)
+        ]
+        handlers = {id(h): h for lg in loggers for h in lg.handlers}.values()
+        for handler in handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream in (sys.__stderr__, sys.__stdout__):
+                target = sys.stderr if handler.stream is sys.__stderr__ else sys.stdout
+                self._redirected_handlers.append((handler, handler.setStream(target)))
+
+    def _stop_live(self):
+        if self._live is None:
+            return
+        for handler, original_stream in self._redirected_handlers:
+            handler.setStream(original_stream)
+        self._redirected_handlers = []
+        self._live.stop()
+        self._live = None
 
     def on_train_epoch_start(self, trainer, pl_module):
         self._print_if_needed()
@@ -185,7 +277,10 @@ class EpochMetricsTableCallback(pl.Callback):
             return
 
         val_loss = self._to_float(self._metric(metrics, "val_loss", "val_loss_epoch"))
+        # Same rule as RampAwareEarlyStopping: "best" only counts once the loss weights are final
         improved = False
+        if not _loss_weights_are_final(pl_module):
+            val_loss = None
         if val_loss is not None and (self.best_val_loss is None or val_loss < self.best_val_loss):
             self.best_val_loss = val_loss
             improved = True
@@ -198,8 +293,13 @@ class EpochMetricsTableCallback(pl.Callback):
             str(epoch),
             self._fmt(self._metric(metrics, "training_loss", "loss", "loss_epoch")),
             self._fmt(self._metric(metrics, "val_loss", "val_loss_epoch")),
-            self._fmt(self._metric(metrics, "val_recon_loss", "val_recon_loss_epoch")),
+            # unweighted content / style terms (val_recon_loss = rec_c + w_s * rec_s, with w_s ramping)
+            self._fmt(self._metric(metrics, "val_recon_loss_c", "val_recon_loss_c_epoch")),
+            self._fmt(self._metric(metrics, "val_recon_loss_s", "val_recon_loss_s_epoch")),
+            self._fmt_w_s(pl_module, metrics),
             self._fmt(self._metric(metrics, "val_rec_ratio_to_time_mean", "val_rec_ratio_to_time_mean_epoch"), digits=3),
+            self._fmt(self._metric(metrics, "val_rec_ratio_to_time_mean_pooled"), digits=3),
+            self._fmt(self._metric(metrics, "val_mean_vertex_dev"), digits=3),
             self._fmt_lr(trainer),
             self._fmt_time(epoch_secs),
             "*" if improved else "",
@@ -210,6 +310,7 @@ class EpochMetricsTableCallback(pl.Callback):
 
     def on_fit_end(self, trainer, pl_module):
         self._print_if_needed()
+        self._stop_live()
 
     @staticmethod
     def _metric(metrics, *keys):
@@ -253,6 +354,14 @@ class EpochMetricsTableCallback(pl.Callback):
             return f"{value:.2e}"
         return f"{value:.{digits}f}"
 
+    @classmethod
+    def _fmt_w_s(cls, pl_module, metrics):
+        # The w_s used in this epoch's validation (the logged w_s_effective is a training-epoch
+        # aggregate, only available after validation has run)
+        effective_w_s = getattr(pl_module, "_effective_w_s", None)
+        value = effective_w_s() if effective_w_s is not None else cls._metric(metrics, "w_s_effective")
+        return cls._fmt(value, digits=3)
+
     @staticmethod
     def _fmt_lr(trainer):
         if not trainer.optimizers:
@@ -275,8 +384,12 @@ class EpochMetricsTableCallback(pl.Callback):
             "ep",
             "train",
             "val",
-            "recon",
+            "rec_c",
+            "rec_s",
+            "w_s",
             "ratio_t",
+            "ratio_tp",
+            "vdev",
             "lr",
             "time",
             "best",
@@ -284,7 +397,6 @@ class EpochMetricsTableCallback(pl.Callback):
 
         try:
             from rich import box
-            from rich.console import Console
             from rich.table import Table
         except ImportError:
             logger.info("Epoch metrics: %s", dict(zip(headers, self.rows[-1])))
@@ -295,20 +407,28 @@ class EpochMetricsTableCallback(pl.Callback):
             box=box.SIMPLE_HEAD,
             show_edge=False,
             header_style="bold",
+            collapse_padding=True,
         )
-        table.add_column("ep", justify="right", style="cyan", width=4)
-        table.add_column("train", justify="right", width=8)
-        table.add_column("val", justify="right", width=8)
-        table.add_column("recon", justify="right", width=8)
-        table.add_column("ratio_t", justify="right", width=8)
-        table.add_column("lr", justify="right", width=8)
-        table.add_column("time", justify="right", width=6)
-        table.add_column("best", justify="center", width=4)
+        table.add_column("ep", justify="right", style="cyan")
+        table.add_column("train", justify="right")
+        table.add_column("val", justify="right")
+        table.add_column("rec_c", justify="right")
+        table.add_column("rec_s", justify="right")
+        table.add_column("w_s", justify="right")
+        table.add_column("ratio_t", justify="right")
+        table.add_column("ratio_tp", justify="right")
+        table.add_column("vdev", justify="right")
+        table.add_column("lr", justify="right")
+        table.add_column("time", justify="right")
+        table.add_column("best", justify="center")
 
         for row in reversed(self.rows):
             table.add_row(*row)
 
-        Console().print(table)
+        if self._live is not None:
+            self._live.update(table, refresh=True)
+        else:
+            self._get_console().print(table)
 
 
 class ModelCheckpointWithThreshold(ModelCheckpoint):
