@@ -1,6 +1,8 @@
 import logging
 import math
+import os
 import time
+from urllib.parse import urlparse, unquote
 
 import torch
 import pytorch_lightning as pl
@@ -83,12 +85,58 @@ def get_lightning_module(config: Mapping, dm: pl.LightningDataModule):
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import MLFlowLogger
 from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
 from pytorch_lightning.callbacks import RichModelSummary
 
 early_stopping = EarlyStopping(monitor="val_loss", mode="min", patience=10)
 
-model_checkpoint = ModelCheckpoint(monitor='val_loss', save_top_k=1)
+
+class MLflowArtifactCheckpoint(ModelCheckpoint):
+    '''
+    ModelCheckpoint that saves into the MLflow run's artifact store, under
+    <artifact_uri>/checkpoints/, and keeps a best_model.ckpt symlink pointing to the best one
+    (same layout as delphi's MLFlowLogger.save_model).
+
+    Without this, Lightning derives the directory from MLFlowLogger.save_dir, which is None
+    unless the tracking URI starts with "file:" -- so checkpoints ended up in the cwd,
+    as ./<experiment_id>/<run_id>/checkpoints/.
+    '''
+
+    BEST_MODEL_LINK = "best_model.ckpt"
+
+    def __init__(self, monitor="val_loss", filename="epoch{epoch}__valloss_{val_loss:.4f}",
+                 auto_insert_metric_name=False, **kwargs):
+        super().__init__(monitor=monitor, filename=filename,
+                         auto_insert_metric_name=auto_insert_metric_name, **kwargs)
+
+    def setup(self, trainer, pl_module, stage):
+        if self.dirpath is None:
+            self.dirpath = self._mlflow_checkpoint_dir(trainer)
+        super().setup(trainer, pl_module, stage)
+
+    @staticmethod
+    def _mlflow_checkpoint_dir(trainer):
+        mlflow_logger = trainer.logger
+        if not isinstance(mlflow_logger, MLFlowLogger):
+            return None
+        artifact_uri = mlflow_logger.experiment.get_run(mlflow_logger.run_id).info.artifact_uri
+        parsed = urlparse(artifact_uri)
+        if parsed.scheme not in ("", "file"):
+            logger.warning("Artifact URI %s is not local; falling back to Lightning's default checkpoint dir.", artifact_uri)
+            return None
+        return os.path.join(unquote(parsed.path), "checkpoints")
+
+    def _save_checkpoint(self, trainer, filepath):
+        super()._save_checkpoint(trainer, filepath)
+        if trainer.is_global_zero and self.best_model_path:
+            link = os.path.join(os.path.dirname(self.best_model_path), self.BEST_MODEL_LINK)
+            if os.path.lexists(link):
+                os.remove(link)
+            os.symlink(os.path.basename(self.best_model_path), link)  # relative symlink
+
+
+model_checkpoint = MLflowArtifactCheckpoint(save_top_k=1)
 
 rich_model_summary = RichModelSummary(max_depth=-1)
 
