@@ -17,6 +17,7 @@ def get_mlflow_parameters(config):
         "w_kl": loss.regularization.weight,
         "w_s": loss.reconstruction_s.weight,
         "w_smooth": getattr(getattr(loss, "smoothness", None), "weight", None),
+        "w_thickness": getattr(getattr(loss, "thickness", None), "weight", None),
     }
     transformer_cfg = net.get("transformer", {}) if hasattr(net, "get") else {}
     net_params = {
@@ -30,6 +31,7 @@ def get_mlflow_parameters(config):
         "reduction_factors": net.pooling.parameters.downsampling_factors,
         "phase_input": net.phase_input,
         "translation_head": getattr(net, "translation_head", False),
+        "n_harmonics": getattr(net, "n_harmonics", 1),
         # only meaningful when z_aggr_function=transformer; None/missing for fcn runs
         "transformer_n_layers": transformer_cfg.get("n_layers", None),
         "transformer_d_model": transformer_cfg.get("d_model", None),

@@ -183,6 +183,14 @@ loss_args = {
         "dest": "config.loss.reconstruction_s.shape_weight",
         "type": float,
         "action": ArgumentAction},
+    ("--w_thickness",): {
+        "help": "weight of the wall thickness term: squared difference between real and reconstructed "
+                "epi-endo distances over pairs of nearest epi/endo LV vertices (see "
+                "build_wall_thickness_pairs). 0 (default) disables it. Needs a partition with LV epi/endo "
+                "vertices, and absolute coordinates (not --center_around_mean).",
+        "dest": "config.loss.thickness.weight",
+        "type": float,
+        "action": ArgumentAction},
     ("--w_smooth",): {
         "help": "target weight of the Laplacian smoothness regularizer on the reconstructed mesh "
                 "(penalizes each predicted vertex for deviating from its neighbors' average; "

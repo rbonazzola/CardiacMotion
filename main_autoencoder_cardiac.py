@@ -21,7 +21,7 @@ import cardio_mesh
 
 from cardiac_motion import AutoencoderTemporalSequence
 
-from lightning_modules.ComaLightningModule import CoMA_Lightning
+from lightning_modules.ComaLightningModule import CoMA_Lightning, build_wall_thickness_pairs
 from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshFromBValuesDataset, CardiacMeshPopulationDM, BatchSizeScheduler
 
 
@@ -323,6 +323,12 @@ if __name__ == "__main__":
                               "distinct shape -- past PyTorch's default limit (8) it stops recompiling "
                               "and silently falls back to eager for the rest, which is slow. Set this "
                               "to (at least) the number of distinct shapes to avoid that fallback.")
+    my_args.add_argument("--n_harmonics", "--n-harmonics", type=int, default=1,
+                         help="Number of Fourier harmonics of the cardiac phase used to modulate z_s in "
+                              "the style decoder: [sin(k theta) z_s, cos(k theta) z_s] for k = 1..K. "
+                              "1 (default) is the original single-frequency embedding. The decoder input "
+                              "grows to latent_dim_c + 2 * K * latent_dim_s, so K > 1 is not "
+                              "checkpoint-compatible with runs trained with K = 1.")
     my_args.add_argument("--translation_head", default=False, action="store_true",
                          help="Give the style decoder an explicit per-frame rigid-translation output "
                               "(a small Linear on the same latent used for the mesh, added to the "
@@ -468,6 +474,7 @@ if __name__ == "__main__":
     
     with log_step("Building model and COMA matrices"):
         config.network_architecture.translation_head = args.translation_head
+        config.network_architecture.n_harmonics = args.n_harmonics
         model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
         if args.compile:
             if args.compile_cache_size_limit is not None:
@@ -475,12 +482,20 @@ if __name__ == "__main__":
                 logger.info("torch._dynamo.config.cache_size_limit set to %d", args.compile_cache_size_limit)
             logger.info("Compiling model with torch.compile (mode=%s)...", args.compile_mode)
             model = torch.compile(model, mode=args.compile_mode)
-        lit_module = CoMA_Lightning(model=model, loss_params=config.loss, optimizer_params=config.optimizer, additional_params=config, mesh_template=mesh_template)
+        thickness_pairs = None
+        if getattr(getattr(config.loss, "thickness", None), "weight", 0) > 0:
+            if args.center_around_mean:
+                raise ValueError("--w_thickness needs absolute coordinates: it can't be combined with --center_around_mean")
+            thickness_pairs = build_wall_thickness_pairs(mesh_template.v, cardio_mesh.get_lv_wall_labels(args.partition))
+            logger.info("Wall thickness term: %d epi-endo vertex pairs, weight=%s", len(thickness_pairs), config.loss.thickness.weight)
+        lit_module = CoMA_Lightning(model=model, loss_params=config.loss, optimizer_params=config.optimizer, additional_params=config,
+                                    mesh_template=mesh_template, thickness_pairs=thickness_pairs)
     logger.info("Model ready: trainable_parameters=%d", sum(p.numel() for p in lit_module.parameters() if p.requires_grad))
 
     # --------------------------
     # 6. Configure Trainer and Run
     # --------------------------
+    early_stopping.patience = trainer_args.patience
     callbacks = [
         early_stopping,
         model_checkpoint,

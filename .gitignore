@@ -26,9 +26,3 @@ sync.log
 
 # Build artifacts
 *.egg-info/
-
-# Never commit credentials
-docker/ssh_keys/
-
-# Scratch code marked for deletion
-cardiac_motion/models/lightning_to_delete/

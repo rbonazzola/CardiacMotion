@@ -173,6 +173,7 @@ class AutoencoderTemporalSequence(nn.Module):
                 decoder_style   = DecoderStyle.build_from_dictionary(
                     coma_args, phase_embedding_method=phase_embedding_method, n_timeframes=n_timeframes,
                     translation_head=bool(config.network_architecture.get("translation_head", False)),
+                    n_harmonics=int(config.network_architecture.get("n_harmonics", 1)),
                 ),
                 is_variational=coma_args.is_variational),
             is_variational=coma_args.is_variational,
@@ -310,17 +311,20 @@ class DecoderStyle(nn.Module):
     def __init__(self, decoder_config: dict, 
                  phase_embedding_method: PHASE_EMBEDDINGS = "exp", 
                  n_timeframes: Union[int, None]=None,
-                 translation_head: bool = False):
+                 translation_head: bool = False,
+                 n_harmonics: int = 1):
 
         super(DecoderStyle, self).__init__()
 
         decoder_config = copy(decoder_config)
         # self.n_timeframes = decoder_config.pop("n_timeframes")
         self.n_timeframes = n_timeframes
+        # Number of Fourier harmonics of the cardiac phase used to modulate z_s (see PhaseTensor).
+        self.n_harmonics = n_harmonics
         self.phase_embedding = self._get_phase_embedding(phase_embedding_method, self.n_timeframes)
 
         decoder_config = copy(decoder_config)
-        combined_latent_dim = decoder_config.pop("latent_dim_content") + 2 * decoder_config.pop("latent_dim_style")
+        combined_latent_dim = decoder_config.pop("latent_dim_content") + 2 * n_harmonics * decoder_config.pop("latent_dim_style")
         decoder_config["latent_dim"] = combined_latent_dim
         decoder_config["num_conv_filters_dec"] = decoder_config.pop("num_conv_filters_dec_s")
 
@@ -348,10 +352,10 @@ class DecoderStyle(nn.Module):
             raise NotImplementedError
 
         elif phase_embedding_method.lower() in ["exponential_v1", "exp_v1", "exp"]:
-            return PhaseTensor(version="version_1")
+            return PhaseTensor(version="version_1", n_harmonics=self.n_harmonics)
 
         elif phase_embedding_method.lower() in ["exponential_v2", "exp_v2"]:
-            return PhaseTensor(version="version_2")
+            return PhaseTensor(version="version_2", n_harmonics=self.n_harmonics)
 
         else:
             raise ValueError(f"Method of phase embedding {phase_embedding_method} has not been recognised.")
@@ -379,9 +383,9 @@ class DecoderStyle(nn.Module):
     
 
     @classmethod
-    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes, translation_head=False):
+    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes, translation_head=False, n_harmonics=1):
         dec_config = {k: v for k, v in config_dict.items() if k in DECODER_S_ARGS}
-        return cls(dec_config, phase_embedding_method, n_timeframes, translation_head=translation_head)
+        return cls(dec_config, phase_embedding_method, n_timeframes, translation_head=translation_head, n_harmonics=n_harmonics)
       
             
 class DecoderTemporalSequence(nn.Module):

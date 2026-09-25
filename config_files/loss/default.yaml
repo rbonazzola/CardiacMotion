@@ -17,6 +17,10 @@
     type: "KL",
     weight: 1
   },
+  thickness: {
+    type: "wall_thickness",
+    weight: 0
+  },
   smoothness: {
     type: "laplacian",
     weight: 0,

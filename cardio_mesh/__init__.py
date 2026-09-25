@@ -121,6 +121,32 @@ def load_fhm_topology() -> Cardiac3DMesh:
     return Cardiac3DMesh(vertices, faces, subpart_id)
 
 
+LV_WALL_LABELS = {0: "base", 1: "epi", 2: "endo"}
+
+
+def get_lv_wall_labels(partition: str) -> np.ndarray:
+    """
+    Per-vertex label for the vertices of `partition` (in the same order as its meshes): "epi" /
+    "endo" / "base" for left-ventricle vertices (from data/lv_base_epi_endo_labels.txt, defined on
+    the 4396 FHM LV vertices), and the FHM subpart name (e.g. "MVP", "AVP") for the rest.
+    """
+    subsetting = paths.get_subsetting_matrix(partition).tocsr()
+    assert np.all(np.diff(subsetting.indptr) == 1), "expected one FHM vertex per partition vertex"
+    fhm_index = subsetting.indices  # FHM vertex of each partition vertex (one entry per row)
+
+    fhm_subparts = np.array(paths.get_fhm_subpart_ids())
+    lv_fhm_index = np.flatnonzero(fhm_subparts == "LV")
+    lv_labels = np.loadtxt(os.path.join(paths.DATA_DIR, "lv_base_epi_endo_labels.txt"), dtype=int)
+    assert len(lv_labels) == len(lv_fhm_index), "LV wall labels don't match the FHM LV vertices"
+
+    labels = fhm_subparts[fhm_index].astype(object)
+    position_in_lv = np.full(len(fhm_subparts), -1)
+    position_in_lv[lv_fhm_index] = np.arange(len(lv_fhm_index))
+    is_lv = position_in_lv[fhm_index] >= 0
+    labels[is_lv] = [LV_WALL_LABELS[x] for x in lv_labels[position_in_lv[fhm_index][is_lv]]]
+    return labels.astype(str)
+
+
 def _resolve_partition(partition) -> tuple[str, ...]:
     if isinstance(partition, str):
         return _PARTITION_ALIASES.get(partition, (partition,))

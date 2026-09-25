@@ -4,10 +4,15 @@ from torch import nn
 
 class PhaseTensor(nn.Module):
 
-    def __init__(self, version="version_1"):
+    def __init__(self, version="version_1", n_harmonics=1):
 
         super(PhaseTensor, self).__init__()
         self.version = version
+        self.n_harmonics = n_harmonics
+        if n_harmonics < 1:
+            raise ValueError(f"n_harmonics must be >= 1, got {n_harmonics}")
+        if version != "version_1" and n_harmonics != 1:
+            raise NotImplementedError(f"n_harmonics > 1 is only implemented for version_1, not {version}")
 
     def phase_tensor(self, x):
         '''
@@ -15,31 +20,27 @@ class PhaseTensor(nn.Module):
           z: a batched vector (N x T x M)
 
         returns:
-          a phase-aware vector (N x T x 2M)
+          a phase-aware vector (N x T x 2KM), K = n_harmonics:
+          [sin(theta) x, cos(theta) x, sin(2 theta) x, cos(2 theta) x, ...], theta = 2 pi t / T.
+          For K = 1 this is the original [sin(theta) x, cos(theta) x].
         '''
 
         if self.version == "version_1":
 
-            sen_t = []; cos_t = []
             n_timeframes, rank = x.shape[1], x.dim()
-
-            for i in range(n_timeframes):
-                phase = 2 * np.pi * i / n_timeframes
-                sen_t.append(np.sin(phase))
-                cos_t.append(np.cos(phase))
 
             dims_to_expand = list(range(rank))
             dims_to_expand.remove(1)  # don't expand along the "time" dimension
             dims_to_expand = tuple(dims_to_expand)
 
-            sen_t = np.array(sen_t); cos_t = np.array(cos_t)
-            sen_t = np.expand_dims(sen_t, axis=dims_to_expand)
-            cos_t = np.expand_dims(cos_t, axis=dims_to_expand)
-            sen_t = torch.Tensor(sen_t); cos_t = torch.Tensor(cos_t)
-            sen_t = sen_t.type_as(x); cos_t = cos_t.type_as(x)
+            parts = []
+            for k in range(1, self.n_harmonics + 1):
+                phase = 2 * np.pi * k * np.arange(n_timeframes) / n_timeframes
+                for trig in (np.sin, np.cos):
+                    wave = torch.Tensor(np.expand_dims(trig(phase), axis=dims_to_expand)).type_as(x)
+                    parts.append(wave * x)
 
-            phased_x = torch.cat((sen_t * x, cos_t * x), dim=-1)
-            phased_x.type_as(x)
+            phased_x = torch.cat(parts, dim=-1)
 
         elif self.version == "version_2":
 

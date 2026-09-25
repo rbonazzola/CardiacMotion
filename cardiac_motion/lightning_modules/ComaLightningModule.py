@@ -14,9 +14,17 @@ from models.Model4D import AutoencoderTemporalSequence, LOG_VAR_MAX, LOG_VAR_MIN
 
 logger = logging.getLogger(__name__)
 
+def per_vertex_mse(real, recon):
+    """
+    Squared Euclidean distance per vertex (summed over xyz), averaged over vertices, frames and
+    subjects -- i.e. 3x F.mse_loss, which averages over coordinates too. real/recon: (..., V, 3).
+    """
+    return ((real - recon) ** 2).sum(-1).mean()
+
+
 losses_menu = {
   "l1": F.l1_loss,
-  "mse": F.mse_loss
+  "mse": per_vertex_mse
 }
 
 def mse(s1, s2=None):
@@ -28,7 +36,8 @@ def mse(s1, s2=None):
 def translation_shape_split_loss(rec_loss_fn, real, recon):
     """
     Splits a reconstruction MSE into a per-frame rigid-translation term and a
-    shape (translation-invariant) term. real/recon: (..., V, 3).
+    shape (translation-invariant) term. real/recon: (..., V, 3). With per_vertex_mse, the
+    translation term is the squared distance between centroids.
 
     Exact decomposition: since real-recon = (shape_real-shape_recon) +
     (centroid_real-centroid_recon) and the shape residual sums to zero over
@@ -52,6 +61,65 @@ def safe_mean_ratio(numerator, denominator):
     if not valid.any():
         return torch.tensor(float("nan"), device=numerator.device, dtype=numerator.dtype)
     return (numerator[valid] / denominator[valid]).mean()
+
+
+def pooled_ratio(outputs):
+    """
+    Ratio of totals over an epoch: sum of per-frame reconstruction errors / sum of per-frame
+    deviations from the static shape, i.e. total model error relative to the total error of
+    predicting the static shape for every frame (see _shared_eval_step).
+    """
+    rec_err = torch.stack([x["rec_err_sum"] for x in outputs]).sum()
+    dev_static = torch.stack([x["dev_static_sum"] for x in outputs]).sum()
+    if dev_static.abs() <= torch.finfo(dev_static.dtype).eps:
+        return torch.tensor(float("nan"), dtype=rec_err.dtype)
+    return rec_err / dev_static
+
+
+def pooled_mean_vertex_dev(outputs):
+    """Mean per-vertex Euclidean reconstruction distance over all vertices/frames/subjects of an epoch."""
+    total = torch.stack([x["vertex_dev_sum"] for x in outputs]).sum()
+    count = torch.stack([x["vertex_count"] for x in outputs]).sum()
+    return total / count
+
+
+def build_wall_thickness_pairs(vertices, labels) -> torch.Tensor:
+    """
+    (epi, endo) vertex index pairs across the left-ventricular wall, as close as possible: each epi
+    vertex paired with its nearest endo vertex and each endo vertex with its nearest epi vertex
+    (duplicates removed), so every vertex of both surfaces is in at least one pair. Computed once
+    on a template (e.g. the mean shape): meshes are in vertex correspondence, so the same indices
+    apply to every subject and frame. vertices: (V, 3); labels: (V,) with "epi"/"endo" entries.
+    """
+    vertices = torch.as_tensor(np.asarray(vertices), dtype=torch.float64)
+    labels = np.asarray(labels)
+    epi = torch.as_tensor(np.flatnonzero(labels == "epi"))
+    endo = torch.as_tensor(np.flatnonzero(labels == "endo"))
+    if len(epi) == 0 or len(endo) == 0:
+        raise ValueError("wall thickness pairs need both epi and endo vertices")
+    distances = torch.cdist(vertices[epi], vertices[endo])  # (n_epi, n_endo)
+    pairs = torch.cat([
+        torch.stack([epi, endo[distances.argmin(dim=1)]], dim=1),
+        torch.stack([epi[distances.argmin(dim=0)], endo], dim=1),
+    ])
+    return torch.unique(pairs, dim=0)
+
+
+def wall_thickness_distances(x: torch.Tensor, pairs: torch.Tensor) -> torch.Tensor:
+    """Euclidean epi-endo distance of each pair. x: (..., V, 3); pairs: (P, 2) -> (..., P)."""
+    return torch.linalg.vector_norm(x[..., pairs[:, 0], :] - x[..., pairs[:, 1], :], dim=-1)
+
+
+def aggregate_thickness(outputs):
+    """
+    Epoch-level wall thickness terms: mean of the per-batch losses (like the other losses), and the
+    mean absolute thickness error over every pair/frame/subject (NaN when there are no pairs).
+    """
+    loss = torch.stack([x["thickness_loss"] for x in outputs]).mean()
+    count = torch.stack([x["thickness_count"] for x in outputs]).sum()
+    abs_err = torch.stack([x["thickness_abs_err_sum"] for x in outputs]).sum()
+    mae = abs_err / count if count > 0 else torch.tensor(float("nan"))
+    return loss, mae
 
 
 def build_laplacian(faces: np.ndarray, n_verts: int) -> torch.Tensor:
@@ -166,6 +234,12 @@ class ConvergenceRamp:
         if self._plateau_epochs >= self.patience:
             self._converged_at_epoch = epoch
 
+    def is_complete(self, epoch: int) -> bool:
+        """True once value(epoch) has reached `target` (always, if the ramp is disabled)."""
+        if self.ramp_epochs <= 0:
+            return True
+        return self._converged_at_epoch is not None and epoch - self._converged_at_epoch >= self.ramp_epochs
+
     def value(self, epoch: int) -> float:
         if self.ramp_epochs <= 0:
             return self.target
@@ -183,7 +257,8 @@ class CoMA_Lightning(pl.LightningModule):
                  loss_params: Namespace, 
                  optimizer_params: Namespace,
                  additional_params: Namespace,
-                 mesh_template=None
+                 mesh_template=None,
+                 thickness_pairs=None
                 ):
 
         '''
@@ -208,6 +283,16 @@ class CoMA_Lightning(pl.LightningModule):
         self.mesh_template = mesh_template 
 
         self.rec_loss = self.get_rec_loss()
+
+        # Wall thickness term: squared difference between real and reconstructed epi-endo distances
+        # over the (epi, endo) vertex pairs from build_wall_thickness_pairs. Non-persistent buffer:
+        # follows the module's device, but isn't saved in checkpoints.
+        thickness = getattr(self.loss_params, "thickness", None)
+        self.w_thickness = getattr(thickness, "weight", 0.0) if thickness is not None else 0.0
+        pairs = torch.as_tensor(thickness_pairs, dtype=torch.long) if thickness_pairs is not None else None
+        self.register_buffer("thickness_pairs", pairs, persistent=False)
+        if self.w_thickness > 0 and self.thickness_pairs is None:
+            raise ValueError("loss.thickness.weight > 0 requires thickness_pairs")
 
         self.laplacian = None
         self.smooth_mask = None
@@ -312,6 +397,25 @@ class CoMA_Lightning(pl.LightningModule):
     def _effective_w_s(self):
         return self._w_s_ramp.value(self.current_epoch)
 
+    def _wall_thickness_terms(self, s_t, shat_t):
+        """(loss, sum of absolute thickness errors, number of distances); zeros without pairs."""
+        if self.thickness_pairs is None:
+            zero = torch.zeros((), device=s_t.device, dtype=s_t.dtype)
+            return zero, zero, zero
+        error = wall_thickness_distances(shat_t, self.thickness_pairs) - wall_thickness_distances(s_t, self.thickness_pairs)
+        return (error ** 2).mean(), error.abs().sum(), torch.tensor(float(error.numel()), device=s_t.device)
+
+    def loss_weights_are_final(self) -> bool:
+        """
+        True once every scheduled loss weight (w_s and w_smooth ramps, KL warm-up) has reached its
+        final value at the current epoch. Before that, val_loss is computed with weights that are
+        still changing, so it isn't comparable across epochs: early stopping and checkpointing
+        (see RampAwareEarlyStopping / MLflowArtifactCheckpoint) wait until this is True.
+        """
+        epoch = self.current_epoch
+        kl_final = not self._is_variational() or epoch > self.kl_warmup_epochs
+        return self._w_s_ramp.is_complete(epoch) and self._w_smooth_ramp.is_complete(epoch) and kl_final
+
     def _effective_w_smooth(self):
         return self._w_smooth_ramp.value(self.current_epoch)
 
@@ -403,7 +507,9 @@ class CoMA_Lightning(pl.LightningModule):
 
         effective_w_smooth = self._effective_w_smooth()
         self.log("w_smooth_effective", effective_w_smooth, on_step=False, on_epoch=True, prog_bar=False, logger=True)
-        train_loss = recon_loss + self._effective_w_kl() * kld_loss + effective_w_smooth * smooth_loss
+        thickness_loss, _, _ = self._wall_thickness_terms(s_t, shat_t)
+        train_loss = recon_loss + self._effective_w_kl() * kld_loss + effective_w_smooth * smooth_loss \
+                     + self.w_thickness * thickness_loss
         
         # print(f"{recon_loss_c.item()=} + {recon_loss_s.item()=}")
         # print(f"{train_loss.item()=} = {recon_loss.item()=} + {self.w_kl} * {kld_loss.item()=}")
@@ -416,6 +522,7 @@ class CoMA_Lightning(pl.LightningModule):
            "training_recon_loss_s_translation": recon_loss_s_translation,
            "training_recon_loss_s_shape": recon_loss_s_shape,
            "training_smooth_loss": smooth_loss,
+           "training_thickness_loss": thickness_loss,
            "loss": train_loss
         }
 
@@ -437,6 +544,7 @@ class CoMA_Lightning(pl.LightningModule):
         avg_recon_loss_s_shape = torch.stack([x["training_recon_loss_s_shape"] for x in self.train_outputs]).mean()
         avg_recon_loss = torch.stack([x["training_recon_loss"] for x in self.train_outputs]).mean()
         avg_smooth_loss = torch.stack([x["training_smooth_loss"] for x in self.train_outputs]).mean()
+        avg_thickness_loss = torch.stack([x["training_thickness_loss"] for x in self.train_outputs]).mean()
         avg_loss = torch.stack([x["loss"] for x in self.train_outputs]).mean()
 
         self.log_dict({
@@ -447,6 +555,7 @@ class CoMA_Lightning(pl.LightningModule):
             "training_recon_loss_s_translation": avg_recon_loss_s_translation,
             "training_recon_loss_s_shape": avg_recon_loss_s_shape,
             "training_smooth_loss": avg_smooth_loss,
+            "training_thickness_loss": avg_thickness_loss,
             "training_loss": avg_loss
           },
           # on_epoch=False,
@@ -517,11 +626,26 @@ class CoMA_Lightning(pl.LightningModule):
             kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(recon_loss)
             loss = recon_loss + self._effective_w_smooth() * smooth_loss
 
+        thickness_loss, thickness_abs_err_sum, thickness_count = self._wall_thickness_terms(s_t, shat_t)
+        loss = loss + self.w_thickness * thickness_loss
+
         recon_error = mse(s_t, shat_t)
 
         # N-dimensional
         rec_ratio_to_pop_mean_c = safe_mean_ratio(mse(time_avg_s, time_avg_s_hat), mse(time_avg_s))
         rec_ratio_to_time_mean = safe_mean_ratio(recon_error, mse_mesh_to_tmp_mean)
+        # Sums for the pooled version (ratio of totals over the whole epoch, computed at epoch end):
+        # unlike the mean of per-frame ratios above, it isn't dominated by frames close to the
+        # static frame, whose tiny denominators blow the ratio up.
+        # Mean Euclidean distance between reconstructed and real vertices (square root taken per
+        # vertex, before averaging), over every frame of the sequence: summed here, averaged at epoch end.
+        vertex_dev = torch.linalg.vector_norm(s_t - shat_t, dim=-1)
+        self._pooled_sums = {
+            "rec_err_sum": recon_error.sum(), "dev_static_sum": mse_mesh_to_tmp_mean.sum(),
+            "vertex_dev_sum": vertex_dev.sum(), "vertex_count": torch.tensor(float(vertex_dev.numel())),
+            "thickness_loss": thickness_loss,
+            "thickness_abs_err_sum": thickness_abs_err_sum, "thickness_count": thickness_count,
+        }
 
         # Only computable when template_mesh was provided to the dataset
         if mse_mesh_to_pop_mean is not None:
@@ -556,7 +680,7 @@ class CoMA_Lightning(pl.LightningModule):
           "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
         
-        self.val_outputs.append({k: v.detach().cpu() for k, v in loss_dict.items()})
+        self.val_outputs.append({k: v.detach().cpu() for k, v in {**loss_dict, **self._pooled_sums}.items()})
         self.log_dict(loss_dict)
         return loss_dict
 
@@ -574,9 +698,18 @@ class CoMA_Lightning(pl.LightningModule):
         rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in self.val_outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["val_rec_ratio_to_pop_mean"] for x in self.val_outputs]).mean()
         rec_ratio_to_pop_mean_c = torch.stack([x["val_rec_ratio_to_pop_mean_c"] for x in self.val_outputs]).mean()
+        rec_ratio_to_time_mean_pooled = pooled_ratio(self.val_outputs)
+        mean_vertex_dev = pooled_mean_vertex_dev(self.val_outputs)
+        thickness_loss, thickness_mae = aggregate_thickness(self.val_outputs)
 
         if not self.trainer.sanity_checking:
             self._update_ramps(avg_recon_loss_c.item(), avg_recon_loss_s.item())
+            weights_final = self.loss_weights_are_final()
+            if weights_final and not getattr(self, "_logged_weights_final", False):
+                logger.info("Loss weights reached their final values at epoch %d -- early stopping and "
+                            "checkpointing now monitor val_loss.", self.current_epoch)
+                self._logged_weights_final = True
+            self.log("loss_weights_final", float(weights_final), on_step=False, on_epoch=True, logger=True)
 
         self.log_dict({
             "val_kld_loss": avg_kld_loss, 
@@ -586,6 +719,10 @@ class CoMA_Lightning(pl.LightningModule):
             "val_smooth_loss": avg_smooth_loss,
             "val_loss": avg_loss,
             "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
+            "val_rec_ratio_to_time_mean_pooled": rec_ratio_to_time_mean_pooled,
+            "val_mean_vertex_dev": mean_vertex_dev,
+            "val_thickness_loss": thickness_loss,
+            "val_thickness_mae": thickness_mae,
             "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
             "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
           },
@@ -617,7 +754,7 @@ class CoMA_Lightning(pl.LightningModule):
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
 
-        self.test_outputs.append({k: v.detach().cpu() for k, v in loss_dict.items()})
+        self.test_outputs.append({k: v.detach().cpu() for k, v in {**loss_dict, **self._pooled_sums}.items()})
         self.log_dict(loss_dict)
         return loss_dict
 
@@ -633,6 +770,9 @@ class CoMA_Lightning(pl.LightningModule):
         rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in self.test_outputs]).mean()
         rec_ratio_to_pop_mean = torch.stack([x["test_rec_ratio_to_pop_mean"] for x in self.test_outputs]).mean()
         rec_ratio_to_pop_mean_c = torch.stack([x["test_rec_ratio_to_pop_mean_c"] for x in self.test_outputs]).mean()
+        rec_ratio_to_time_mean_pooled = pooled_ratio(self.test_outputs)
+        mean_vertex_dev = pooled_mean_vertex_dev(self.test_outputs)
+        thickness_loss, thickness_mae = aggregate_thickness(self.test_outputs)
         
         loss_dict = {
           "test_kld_loss": avg_kld_loss, 
@@ -642,6 +782,10 @@ class CoMA_Lightning(pl.LightningModule):
           "test_smooth_loss": avg_smooth_loss,
           "test_loss": avg_loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
+          "test_rec_ratio_to_time_mean_pooled": rec_ratio_to_time_mean_pooled,
+          "test_mean_vertex_dev": mean_vertex_dev,
+          "test_thickness_loss": thickness_loss,
+          "test_thickness_mae": thickness_mae,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
