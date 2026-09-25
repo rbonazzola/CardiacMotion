@@ -101,6 +101,15 @@ network_architecture_args = {
         "type": float,
         "action": ArgumentAction,
         "dest": "config.network_architecture.transformer.dropout"},
+    ("--encoder_n_timeframes",): {
+        "help": "If set, the encoder only sees a random subsample of this many frames "
+                "each forward call (fresh subset per call, shared across the batch) -- "
+                "the decoder still reconstructs/is compared against the full sequence "
+                "(--n_timeframes). Requires --z_aggr_function transformer (FCN_Aggregator's "
+                "input width is tied to a fixed frame count).",
+        "type": int,
+        "action": ArgumentAction,
+        "dest": "config.network_architecture.encoder_n_timeframes"},
     ("--only_decoder",): {
         "help": "Flag to run only the decoder",
         "action": "store_true"},
@@ -279,6 +288,24 @@ training_args = {
     ("--partition_lengths", "--partition-lengths"): {
         "nargs":"+", "help": "List of two [or three] integers (floats) representing the number of samples (fraction of samples) to be used for training, validation [and testing].",
         "dest": "config.sample_sizes",
+        "action": ArgumentAction},
+    ("--betas",): {
+        "help": "Adam beta1 beta2 (two floats). optimizer/default_adam.yaml default is "
+                "(0.5, 0.99) -- an unusually low beta1, more typical of GAN training (e.g. "
+                "DCGAN) than VAEs. Try (0.9, 0.999) for the standard Adam/VAE setting.",
+        "nargs": 2, "type": float,
+        "action": ArgumentAction,
+        "dest": "config.optimizer.parameters.betas"},
+    ("--weight_decay",): {
+        "help": "AdamW-style weight decay. optimizer/default_adam.yaml default is 0.0005.",
+        "type": float,
+        "action": ArgumentAction,
+        "dest": "config.optimizer.parameters.weight_decay"},
+    ("--seed",): {
+        "help": "Random seed for reproducibility (weight init, data split/shuffling, dropout, etc.), "
+                "via pl.seed_everything. Unset (default) means no seeding -- runs are not reproducible.",
+        "dest": "config.seed",
+        "type": int,
         "action": ArgumentAction},
 }
 

@@ -7,7 +7,7 @@ import glob
 import pickle as pkl
 import h5py
 from easydict import EasyDict
-from typing import Optional, List, Union, Literal
+from typing import Optional, List, Union, Literal, Tuple, NamedTuple
 from copy import copy
 
 import torch
@@ -59,6 +59,7 @@ class CardiacMeshPopulationDataset(TensorDataset):
         phases_filter = None,
         static_shape: Literal["end_diastole", "temporal_mean", "end_systole"] = "end_diastole",
         center_around_mean: bool = False,
+        center_around_own_mean: bool = False,
         ):
 
         '''
@@ -68,6 +69,9 @@ class CardiacMeshPopulationDataset(TensorDataset):
           procrustes_transforms: Mapping from IDs to transforms ("rotation" and "traslation")
           center_around_mean: if True, subtract the population mean shape (template_mesh.v)
             from all meshes. Reduces data scale to small residuals, which stabilizes training.
+          center_around_own_mean: if True, subtract each subject's own centroid (mean position
+            over time and vertices) from their own sequence. See the comment at its use site
+            below for why this differs from center_around_mean.
         '''
 
         if center_around_mean and template_mesh is None:
@@ -98,6 +102,7 @@ class CardiacMeshPopulationDataset(TensorDataset):
         self.template_mesh = template_mesh
         self.static_shape = static_shape
         self.center_around_mean = center_around_mean
+        self.center_around_own_mean = center_around_own_mean
         n_frames = len(next(iter(self._paths.values()))) if self._paths else 0
         logger.info(
             "Cardiac dataset indexed: subjects=%d, frames_per_subject=%d, center_around_mean=%s, elapsed=%.2fs",
@@ -203,6 +208,17 @@ class CardiacMeshPopulationDataset(TensorDataset):
             s_t     = s_t     - mean_v
             s_t_avg = s_t_avg - mean_v
 
+        if self.center_around_own_mean:
+            # Subtract THIS subject's own centroid (mean position over both
+            # time and vertices) -- unlike center_around_mean (a single fixed
+            # population template subtracted from everyone), this removes
+            # each subject's own absolute-position offset while leaving their
+            # shape and real within-cycle motion untouched (same constant
+            # vector subtracted from every vertex/frame of that subject).
+            own_centroid = s_t.mean(dim=(0, 1))
+            s_t     = s_t     - own_centroid
+            s_t_avg = s_t_avg - own_centroid
+
         dd = {
           "s_t": s_t,
           "time_avg_s": s_t_avg,
@@ -259,6 +275,7 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         template_mesh=None,
         static_shape: Literal["end_diastole", "temporal_mean", "end_systole"] = "end_diastole",
         center_around_mean: bool = False,
+        center_around_own_mean: bool = False,
         ):
 
         '''
@@ -312,6 +329,7 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         self.template_mesh = template_mesh
         self.static_shape = static_shape
         self.center_around_mean = center_around_mean
+        self.center_around_own_mean = center_around_own_mean
 
         frame_idx = None
         if phases_filter is not None:
@@ -447,6 +465,14 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             s_t = s_t - template_v
             s_t_avg = s_t_avg - template_v
 
+        if self.center_around_own_mean:
+            # Subtract each subject's own centroid (mean position over time
+            # and vertices) -- see CardiacMeshPopulationDataset.__getitem__
+            # for why this differs from center_around_mean.
+            own_centroid = s_t.mean(dim=(1, 2), keepdim=True)  # (B, 1, 1, 3)
+            s_t     = s_t     - own_centroid
+            s_t_avg = s_t_avg - own_centroid.squeeze(1)
+
         return EasyDict({
             "s_t": s_t,
             "time_avg_s": s_t_avg,
@@ -455,40 +481,148 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         })
 
 
-class CardiacMeshPopulationDM(pl.LightningDataModule):    
-    
+class StageConfig(NamedTuple):
+    batch_size: int
+    grad_accum_steps: int
+
+
+class BatchSizeScheduler:
+    """Resolves batch_size and grad_accum_steps for a given epoch.
+
+    Ported from ~/repos/delphi's data/dataset.py -- same string format/
+    semantics, so schedules are portable between the two codebases.
+
+    Schedule format: list of (n_epochs, batch_size, grad_accum_steps) tuples.
+    The last entry may use n_epochs=None to mean "for all remaining epochs".
+
+    Use BatchSizeScheduler.from_string() to build from a CLI-friendly string:
+
+        "10:32,10:64,*:256x4"
+
+    Each stage is "n_epochs:batch_size" or "n_epochs:batch_sizexgrad_accum".
+    Use "*" as n_epochs for the last open-ended stage.
+
+    Example:
+        scheduler = BatchSizeScheduler.from_string("10:32,10:64,*:256x4")
+        # epochs 0-9   -> batch_size=32,  grad_accum=1  (effective batch=32)
+        # epochs 10-19 -> batch_size=64,  grad_accum=1  (effective batch=64)
+        # epoch 20+    -> batch_size=256, grad_accum=4  (effective batch=1024)
+    """
+
+    def __init__(self, schedule: List[Tuple[Optional[int], int, int]]):
+        if not schedule:
+            raise ValueError("schedule must have at least one entry")
+        for i, (n, _, _) in enumerate(schedule):
+            if n is None and i != len(schedule) - 1:
+                raise ValueError("Only the last schedule entry may have n_epochs=None")
+        self._schedule = list(schedule)
+
+    def step(self, epoch: int) -> StageConfig:
+        """Return the StageConfig (batch_size, grad_accum_steps) for the given epoch."""
+        elapsed = 0
+        for n_epochs, batch_size, grad_accum in self._schedule:
+            if n_epochs is None or epoch < elapsed + n_epochs:
+                return StageConfig(batch_size, grad_accum)
+            elapsed += n_epochs
+        n, bs, ga = self._schedule[-1]
+        return StageConfig(bs, ga)
+
+    def stage_boundaries(self) -> dict:
+        """{stage_start_epoch: grad_accum_steps} for every stage -- feeds
+        pytorch_lightning.callbacks.GradientAccumulationScheduler directly."""
+        boundaries = {}
+        epoch = 0
+        for n_epochs, _, grad_accum in self._schedule:
+            boundaries[epoch] = grad_accum
+            if n_epochs is None:
+                break
+            epoch += n_epochs
+        return boundaries
+
+    def __str__(self) -> str:
+        parts = []
+        for n_epochs, batch_size, grad_accum in self._schedule:
+            n_str = "*" if n_epochs is None else str(n_epochs)
+            bs_str = f"{batch_size}x{grad_accum}" if grad_accum > 1 else str(batch_size)
+            parts.append(f"{n_str}:{bs_str}")
+        return ",".join(parts)
+
+    @classmethod
+    def from_string(cls, s: str) -> "BatchSizeScheduler":
+        """Parse a schedule string.
+
+        Format: comma-separated "n_epochs:batch_size[xgrad_accum]" pairs.
+
+        Examples:
+            "5:32,10:64,*:128"       # no accumulation
+            "10:32,10:64,*:256x4"    # last stage: batch=256, accum=4
+        """
+        schedule = []
+        for part in s.split(","):
+            part = part.strip()
+            n_str, rest = part.split(":")
+            n = None if n_str.strip() == "*" else int(n_str.strip())
+            if "x" in rest:
+                bs_str, ga_str = rest.split("x")
+                grad_accum = int(ga_str.strip())
+            else:
+                bs_str, grad_accum = rest, 1
+            schedule.append((n, int(bs_str.strip()), grad_accum))
+        return cls(schedule)
+
+
+class CardiacMeshPopulationDM(pl.LightningDataModule):
+
     '''
     PyTorch datamodule wrapping the CardiacMeshPopulation class
     '''
-    
-    def __init__(self, 
+
+    def __init__(self,
         dataset: TensorDataset,
         batch_size: int = 16,
         split_lengths: Union[None, List[int]]=None,
-        num_workers=3
+        num_workers=3,
+        batch_size_scheduler: Optional[BatchSizeScheduler] = None,
     ):
-    
+
         '''
         params:
             dataset:
-            batch_size:
+            batch_size: used as-is when batch_size_scheduler is None; otherwise
+                only used before training starts (e.g. sanity checks), since
+                train/val/test_dataloader() resolve the per-epoch batch size
+                from the scheduler instead.
             split_lengths:
             num_workers:
+            batch_size_scheduler: optional BatchSizeScheduler -- when set,
+                requires reload_dataloaders_every_n_epochs=1 on the Trainer
+                so *_dataloader() actually gets called (and re-resolves
+                batch_size) at the start of every epoch. The underlying
+                train/val/test split is only computed once, in setup() --
+                only the DataLoader's batch_size changes between epochs.
         '''
-        
+
         super().__init__()
-        
+
         self.dataset = dataset
         self.batch_size = batch_size
         self.split_lengths = self._get_split_lengths(split_lengths)
         self.num_workers=num_workers
+        self.batch_size_scheduler = batch_size_scheduler
         logger.info(
-            "CardiacMeshPopulationDM initialized: dataset=%d, batch_size=%d, split_lengths=%s, num_workers=%d",
+            "CardiacMeshPopulationDM initialized: dataset=%d, batch_size=%d, split_lengths=%s, num_workers=%d%s",
             len(self.dataset),
             self.batch_size,
             self.split_lengths,
             self.num_workers,
+            f", batch_size_schedule={batch_size_scheduler}" if batch_size_scheduler is not None else "",
         )
+
+    def _current_batch_size(self) -> int:
+        if self.batch_size_scheduler is None:
+            return self.batch_size
+        epoch = self.trainer.current_epoch if self.trainer is not None else 0
+        return self.batch_size_scheduler.step(epoch).batch_size
         
         
     def _get_split_lengths(self, split_lengths):
@@ -548,16 +682,19 @@ class CardiacMeshPopulationDM(pl.LightningDataModule):
         # self.test_indices = indices[self.split_lengths[0]+self.split_lengths[1]:self.split_lengths[0]+self.split_lengths[1]+self.split_lengths[2]]        
  
     def train_dataloader(self):
-        logger.info("Creating train dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
+        bs = self._current_batch_size()
+        logger.info("Creating train dataloader: batch_size=%d, num_workers=%d", bs, self.num_workers)
+        return DataLoader(self.train_dataset, batch_size=bs, num_workers=self.num_workers, pin_memory=_cuda_usable())
 
     def val_dataloader(self):
-        logger.info("Creating val dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
+        bs = self._current_batch_size()
+        logger.info("Creating val dataloader: batch_size=%d, num_workers=%d", bs, self.num_workers)
+        return DataLoader(self.val_dataset, batch_size=bs, num_workers=self.num_workers, pin_memory=_cuda_usable())
 
     def test_dataloader(self):
-        logger.info("Creating test dataloader: batch_size=%d, num_workers=%d", self.batch_size, self.num_workers)
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=_cuda_usable())
+        bs = self._current_batch_size()
+        logger.info("Creating test dataloader: batch_size=%d, num_workers=%d", bs, self.num_workers)
+        return DataLoader(self.test_dataset, batch_size=bs, num_workers=self.num_workers, pin_memory=_cuda_usable())
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         # Runs once per batch, after Lightning has already moved it to the

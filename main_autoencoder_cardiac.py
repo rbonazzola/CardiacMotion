@@ -1,5 +1,6 @@
 import os, sys
 import logging
+import tempfile
 import time
 from contextlib import contextmanager
 
@@ -21,7 +22,7 @@ import cardio_mesh
 from cardiac_motion import AutoencoderTemporalSequence
 
 from lightning_modules.ComaLightningModule import CoMA_Lightning
-from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshFromBValuesDataset, CardiacMeshPopulationDM
+from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshFromBValuesDataset, CardiacMeshPopulationDM, BatchSizeScheduler
 
 
 from utils.mlflow_write_helpers import (
@@ -61,7 +62,7 @@ from config.load_config import (
 
 ################################################################################################
 
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, GradientAccumulationScheduler
 from pytorch_lightning.profilers import SimpleProfiler
 profiler = SimpleProfiler(filename='simple_profiler_output.txt')
 
@@ -172,10 +173,56 @@ def add_trainer_args(parser):
     return trainer_args
 
 
-def main(model, datamodule, trainer, mlflow_config=None):
+def export_test_mesh_samples(lit_module, datamodule, faces, n_samples):
+    '''
+    Runs inference on the first n_samples subjects of the (already-decided)
+    test split and logs their original + reconstructed mesh sequences (all
+    timeframes) as a single .npz MLflow artifact under test_samples/ -- a
+    quick set of real shapes to eyeball reconstruction quality without
+    having to reload the checkpoint and redo inference later.
+
+    Reads datamodule.test_dataset *after* trainer.test() has run, so this is
+    the exact same split that produced the reported test_recon_loss etc.
+    '''
+    test_dataset = datamodule.test_dataset
+    n = min(n_samples, len(test_dataset))
+    if n == 0:
+        logger.warning("Test set is empty -- skipping mesh sample export.")
+        return
+
+    subject_ids = [datamodule.dataset.ids[i] for i in test_dataset.indices[:n]]
+    items = [test_dataset[i] for i in range(n)]
+
+    device = next(lit_module.parameters()).device
+    raw_batch = {k: torch.stack([item[k] for item in items]).to(device) for k in items[0]}
+    # No-op for CardiacMeshPopulationDataset (already s_t/time_avg_s/...);
+    # runs the PCA+rigid+Procrustes reconstruction for CardiacMeshFromBValuesDataset.
+    batch = datamodule.on_after_batch_transfer(raw_batch, 0)
+
+    lit_module.eval()
+    with torch.no_grad():
+        _, _, shat_t = lit_module(batch["s_t"])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "test_mesh_samples.npz")
+        np.savez(
+            out_path,
+            subject_ids=np.array(subject_ids),
+            faces=np.asarray(faces),
+            original=batch["s_t"].cpu().numpy(),
+            reconstruction=shat_t.cpu().numpy(),
+        )
+        mlflow.log_artifact(out_path, artifact_path="test_samples")
+    logger.info(
+        "Exported %d test-set mesh samples (original + reconstruction, %d frames each) to MLflow artifacts/test_samples/",
+        n, batch["s_t"].shape[1],
+    )
+
+
+def main(model, datamodule, trainer, mlflow_config=None, faces=None, n_mesh_samples=0, additional_mlflow_tags=None):
 
     '''
-      config (Namespace):       
+      config (Namespace):
       trainer_args (Namespace):
       mlflow_config (Namespace):
     '''
@@ -183,7 +230,7 @@ def main(model, datamodule, trainer, mlflow_config=None):
     if mlflow_config:
         logger.info("Starting MLflow run in experiment=%s", mlflow_config.experiment_name)
         mlflow_config.run_id = trainer.logger.run_id
-        mlflow_startup(mlflow_config)             
+        mlflow_startup(mlflow_config, tags=additional_mlflow_tags)
         mlflow_log_additional_params(config)
 
     with log_step("Training model"):
@@ -192,6 +239,10 @@ def main(model, datamodule, trainer, mlflow_config=None):
     with log_step("Testing best checkpoint"):
         trainer.test(datamodule=datamodule, ckpt_path='best') # Generates metrics for the full test dataset
     # trainer.predict(ckpt_path='best', datamodule=datamodule) # Generates figures for a few samples
+
+    if mlflow_config and faces is not None and n_mesh_samples > 0:
+        with log_step(f"Exporting {n_mesh_samples} test-set mesh samples"):
+            export_test_mesh_samples(model, datamodule, faces, n_mesh_samples)
 
     mlflow.end_run()
     logger.info("Run finished")
@@ -213,6 +264,18 @@ if __name__ == "__main__":
         my_args.add_argument(*k, **v)
     
     my_args.add_argument("--n_subjects", type=int, default=1000)
+    my_args.add_argument("--batch_size_schedule", "--batch-size-schedule", type=str, default=None,
+                         help="Staged batch_size (and optional gradient accumulation) schedule, "
+                              "same format as ~/repos/delphi's --batch_size_schedule: comma-separated "
+                              "\"n_epochs:batch_size[xgrad_accum]\" stages, \"*\" for the last "
+                              "open-ended stage, e.g. \"10:32,10:64,*:256x4\". Overrides --batch_size "
+                              "once training starts (requires reloading dataloaders every epoch, so "
+                              "there's a small per-epoch overhead vs. a fixed --batch_size).")
+    my_args.add_argument("--n_test_mesh_samples", "--n-test-mesh-samples", type=int, default=20,
+                         help="Number of test-set subjects to run inference on at the end of "
+                              "training, exporting their original + reconstructed mesh sequences "
+                              "(all timeframes) as a single .npz MLflow artifact under "
+                              "test_samples/, for later visualization. 0 disables this.")
     my_args.add_argument("--partition", type=str, default="left_ventricle")
     my_args.add_argument("--data_source", "--data-source", type=str, default="disk", choices=["disk", "bvalues"],
                          help="'disk': load pre-reconstructed meshes from cardio_mesh.MESHES_DIR (default). "
@@ -267,8 +330,21 @@ if __name__ == "__main__":
                               "to reproduce the mesh's global position implicitly. Zero-initialized, so "
                               "it starts as a no-op. Opt-in: adds parameters, not checkpoint-compatible "
                               "with runs trained without it.")
-    trainer_args = add_trainer_args(parser)    
+    trainer_args = add_trainer_args(parser)
     args = parser.parse_args()
+
+    # kwargs_append_action (used by --additional_mlflow_tags/--additional_mlflow_params)
+    # calls setattr(args, "config.additional_mlflow_tags", d) literally -- a flat
+    # attribute whose *name* contains a dot, not a nested args.config.additional_mlflow_tags.
+    # It never goes through rsetattr like the other CLI_args, so it's invisible to
+    # getattr(args, 'config', {}) / overwrite_config_items. Read it directly by its
+    # literal (dotted) attribute name instead.
+    additional_mlflow_tags = getattr(args, "config.additional_mlflow_tags", None) or {}
+
+    batch_size_scheduler = None
+    if args.batch_size_schedule:
+        batch_size_scheduler = BatchSizeScheduler.from_string(args.batch_size_schedule)
+        logger.info("Batch size schedule: %s", batch_size_scheduler)
 
     # --------------------------
     # 2. Load Configuration File
@@ -279,6 +355,13 @@ if __name__ == "__main__":
 
     assert os.path.exists(config.mlflow.tracking_uri), f"MLflow tracking URI, {config.mlflow.tracking_uri}, does not exist"
     assert config.mlflow.artifact_location is None or os.path.exists(config.mlflow.artifact_location), f"MLflow artifact location, {config.mlflow.artifact_location}, does not exist"
+
+    if getattr(config, "seed", None) is not None:
+        pl.seed_everything(config.seed, workers=True)
+        logger.info("Global seed set to %d", config.seed)
+
+    config.batch_size_schedule = args.batch_size_schedule
+    config.n_timeframes = args.n_timeframes
 
     # https://stackoverflow.com/questions/38884513/python-argparse-how-can-i-get-namespace-objects-for-argument-groups-separately
     arg_groups = {}    
@@ -377,7 +460,7 @@ if __name__ == "__main__":
                 len(cardiac_dataset), len(phases_filter), mesh_template.v.shape[0], mesh_template.f.shape[0])
 
     with log_step("Setting up datamodule splits"):
-        ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size, num_workers=args.num_workers) ).setup()
+        ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size, num_workers=args.num_workers, batch_size_scheduler=batch_size_scheduler) ).setup()
 
     # --------------------------
     # 5. Define Model
@@ -411,9 +494,17 @@ if __name__ == "__main__":
     elif trainer_args.enable_rich_progress:
         callbacks.extend([rich_model_summary, progress_bar])
 
+    if batch_size_scheduler is not None:
+        accum_scheduling = batch_size_scheduler.stage_boundaries()
+        if set(accum_scheduling.values()) != {1}:
+            callbacks.append(GradientAccumulationScheduler(scheduling=accum_scheduling))
+            logger.info("Gradient accumulation schedule: %s", accum_scheduling)
+
     (( trainer_kwargs := dict(callbacks=callbacks) )
         .update({ k: getattr(trainer_args, k) for k in ["devices", "accelerator", "min_epochs", "max_epochs", "logger", "precision", "gradient_clip_val"] } ))
     trainer_kwargs["enable_progress_bar"] = not metrics_table_enabled
+    if batch_size_scheduler is not None:
+        trainer_kwargs["reload_dataloaders_every_n_epochs"] = 1
 
     logger.info("Trainer kwargs: %s", {k: v for k, v in trainer_kwargs.items() if k != "callbacks"})
     trainer = pl.Trainer(**trainer_kwargs)
@@ -423,4 +514,4 @@ if __name__ == "__main__":
         if args.dry_run:
             exit()
 
-    main(lit_module, mesh_dm, trainer, config.mlflow)
+    main(lit_module, mesh_dm, trainer, config.mlflow, faces=faces, n_mesh_samples=args.n_test_mesh_samples, additional_mlflow_tags=additional_mlflow_tags)
