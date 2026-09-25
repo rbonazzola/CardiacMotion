@@ -22,7 +22,7 @@ class FCN_Aggregator(nn.Module):
         super(FCN_Aggregator, self).__init__()
         self.fcn = torch.nn.Linear(features_in, features_out)
 
-    def forward(self, x):
+    def forward(self, x, phase=None):
         x = x.reshape(x.shape[0], x.shape[1] * x.shape[2])
         return self.fcn(x)
 
@@ -56,7 +56,7 @@ class DFT_Aggregator(nn.Module):
         self.fcn = torch.nn.Linear(features_in, features_out)
         
                 
-    def forward(self, x):
+    def forward(self, x, phase=None):
 
         x = self.dft(x)
         # Concatenate features in the frequency domain
@@ -216,10 +216,15 @@ class TransformerAggregator(nn.Module):
     def _phase(n_timeframes, device):
         return 2 * math.pi * torch.arange(n_timeframes, device=device, dtype=torch.float32) / n_timeframes
 
-    def forward(self, x):
-        # x: [N, T, F_spatial]
+    def forward(self, x, phase=None):
+        # x: [N, T, F_spatial]. phase: optional [T] radians for the T frames
+        # actually present in x -- pass this when x isn't a uniformly-spaced
+        # equispaced sequence (e.g. a random subsample of a longer cycle),
+        # since self._phase() below would otherwise wrongly assume x's T
+        # frames are evenly spaced over a full 0..2*pi cycle.
         N, T, F = x.shape
-        phase = self._phase(T, x.device)
+        if phase is None:
+            phase = self._phase(T, x.device)
 
         h = self.proj_in(x)
         for layer in self.layers:

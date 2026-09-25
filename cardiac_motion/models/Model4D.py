@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import torch
 from torch import nn
@@ -78,16 +79,24 @@ DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "
 
 class AutoencoderTemporalSequence(nn.Module):
 
-    def __init__(self, 
-                 encoder=None, decoder=None, 
-                 enc_config=None, dec_c_config=None, dec_s_config=None, 
-                 z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp", 
-                 is_variational=False):
+    def __init__(self,
+                 encoder=None, decoder=None,
+                 enc_config=None, dec_c_config=None, dec_s_config=None,
+                 z_aggr_function="dft", n_timeframes=None, phase_embedding_method="exp",
+                 is_variational=False, encoder_n_timeframes=None):
 
         super(AutoencoderTemporalSequence, self).__init__()
-        
+
         self.n_timeframes = n_timeframes
         self.is_variational = is_variational
+        # If set (and < the sequence length seen at forward time), the encoder
+        # only sees a random subsample of this many frames each forward call
+        # (a fresh random subset per call, shared across the batch) -- the
+        # decoder still reconstructs/is compared against the full sequence.
+        # Only meaningful with a phase-aware z_aggr_function (TransformerAggregator);
+        # FCN_Aggregator's parameter count is tied to a fixed frame count and
+        # can't accept a varying T.
+        self.encoder_n_timeframes = encoder_n_timeframes
 
         if encoder is not None:
             self.encoder = encoder            
@@ -132,7 +141,13 @@ class AutoencoderTemporalSequence(nn.Module):
         h = encoder.forward_conv_stack(x, preserve_graph_structure=False)
 
         z_aggr_function_name = str(config.network_architecture.get("z_aggr_function", "fcn")).lower()
+        encoder_n_timeframes = config.network_architecture.get("encoder_n_timeframes", None)
         if z_aggr_function_name in {"fcn", "fully_connected"}:
+            assert encoder_n_timeframes is None, (
+                "--encoder_n_timeframes requires a phase-aware z_aggr_function (transformer) -- "
+                "FCN_Aggregator's input width is tied to a fixed frame count and can't accept a "
+                "varying/subsampled T."
+            )
             z_aggr_function = FCN_Aggregator(features_in=n_timeframes * h.shape[-1], features_out=enc_config.latent_dim)
         elif z_aggr_function_name == "transformer":
             transformer_config = config.network_architecture.get("transformer", {})
@@ -160,7 +175,8 @@ class AutoencoderTemporalSequence(nn.Module):
                     translation_head=bool(config.network_architecture.get("translation_head", False)),
                 ),
                 is_variational=coma_args.is_variational),
-            is_variational=coma_args.is_variational
+            is_variational=coma_args.is_variational,
+            encoder_n_timeframes=config.network_architecture.get("encoder_n_timeframes", None),
         )
 
         return model
@@ -168,10 +184,19 @@ class AutoencoderTemporalSequence(nn.Module):
                     
     def forward(self, s_t):
 
-        z = self.encoder(s_t)
+        T_full = s_t.shape[TIME_DIMENSION]
+        if self.encoder_n_timeframes is not None and self.encoder_n_timeframes < T_full:
+            idx = torch.randperm(T_full, device=s_t.device)[:self.encoder_n_timeframes].sort().values
+            s_t_enc = s_t.index_select(TIME_DIMENSION, idx)
+            frame_phases = 2 * math.pi * idx.to(torch.float32) / T_full
+        else:
+            s_t_enc = s_t
+            frame_phases = None
+
+        z = self.encoder(s_t_enc, frame_phases=frame_phases)
         # z = self.sampling(mu, log_var)
         avg_s, shat_t = self.decoder(z)
-                        
+
         return z, avg_s, shat_t
 
     
@@ -216,8 +241,8 @@ class EncoderTemporalSequence(nn.Module):
         self.mode = mode
 
 
-    def encoder(self, x):
-                
+    def encoder(self, x, frame_phases=None):
+
         self.n_timeframes = x.shape[TIME_DIMENSION]
 
         # Iterate through time points
@@ -228,22 +253,28 @@ class EncoderTemporalSequence(nn.Module):
         # log_var = [ bottleneck["log_var"] for bottleneck in bottleneck_t ] if bottleneck_t[0]["log_var"] is not None else None
 
         # mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
-        
+
         h = self.encoder_3d_mesh.forward_conv_stack(x, preserve_graph_structure=False)
-        mu = self.z_aggr_function_mu(h)
-        
+        # frame_phases: optional [T] radians, forwarded to z_aggr_function so a
+        # phase-aware aggregator (e.g. TransformerAggregator) knows the true
+        # cardiac phase of each frame in x, rather than assuming x's T frames
+        # are evenly spaced over a full cycle -- needed when x is a random
+        # (non-equispaced) subsample of a longer sequence. Ignored by
+        # aggregators that don't use phase (FCN_Aggregator, DFT_Aggregator).
+        mu = self.z_aggr_function_mu(h, phase=frame_phases)
+
         if self.is_variational:
             logging.debug("Generating mu and log_var.")
-            log_var = self.z_aggr_function_log_var(h)
+            log_var = self.z_aggr_function_log_var(h, phase=frame_phases)
         else:
             log_var = None
-            
+
         bottleneck = {"mu": mu, "log_var": log_var}
         return EasyDict(bottleneck)
 
 
-    def forward(self, x):
-        return self.encoder(x)
+    def forward(self, x, frame_phases=None):
+        return self.encoder(x, frame_phases=frame_phases)
 
   
 ##########################################################################################
