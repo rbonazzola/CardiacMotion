@@ -5,6 +5,7 @@ from mlflow.tracking import MlflowClient
 from tqdm import tqdm
 
 import re
+from collections import OrderedDict
 import pickle as pkl
 from easydict import EasyDict
 
@@ -43,6 +44,17 @@ from config.load_config import load_yaml_config
 
 
 ################################################################################
+
+
+def _rename_state_dict_keys(state_dict, old, new):
+    # Keeps the per-module `_metadata` (module versions) that `load_state_dict` relies on,
+    # e.g. to tell legacy ChebConv_Coma checkpoints apart from current ones.
+    renamed = OrderedDict((k.replace(old, new), v) for k, v in state_dict.items())
+    metadata = getattr(state_dict, "_metadata", None)
+    if metadata is not None:
+        renamed._metadata = type(metadata)((k.replace(old, new), v) for k, v in metadata.items())
+    return renamed
+
 
 class Run():
 
@@ -195,8 +207,8 @@ class Run():
         ckpt_path = self.get_ckpt_path()
         model_weights = torch.load(ckpt_path, map_location=torch.device('cpu'))["state_dict"]
         print(f"Loaded weights from checkpoint:\n {ckpt_path}")
-        model_weights = EasyDict({k.replace("model.", ""): v for k, v in model_weights.items()})        
-        model_weights = EasyDict({k.replace("z_aggr_function", "z_aggr_function_mu"): v for k, v in model_weights.items()})
+        model_weights = _rename_state_dict_keys(model_weights, "model.", "")
+        model_weights = _rename_state_dict_keys(model_weights, "z_aggr_function", "z_aggr_function_mu")
         self.model_weights = model_weights
         return model_weights
     

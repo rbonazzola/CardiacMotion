@@ -7,6 +7,7 @@ import glob
 import torch
 from pprint import pprint
 from easydict import EasyDict
+from collections import OrderedDict
 import pickle as pkl
 
 import numpy as np
@@ -99,7 +100,10 @@ for runid, row in df.iterrows():
     model_weights = torch.load(ckpt_path)["state_dict"]
     print(f"Loaded weights from checkpoint:\n {ckpt_path}")
     # model_weights = EasyDict(model_weights)
-    model_weights = EasyDict({k.replace("model.", ""): v for k, v in model_weights.items()})
+    metadata = getattr(model_weights, "_metadata", None)  # module versions, used by ChebConv_Coma
+    model_weights = OrderedDict((k.replace("model.", ""), v) for k, v in model_weights.items())
+    if metadata is not None:
+        model_weights._metadata = type(metadata)((k.replace("model.", ""), v) for k, v in metadata.items())
     
     try:
         model_weights["encoder.encoder_3d_mesh.layers.layer_2.graph_conv.lins.11.weight"]

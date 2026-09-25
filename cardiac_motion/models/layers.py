@@ -1,4 +1,4 @@
-import itertools
+import warnings
 import torch
 from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
@@ -45,31 +45,54 @@ class ChebConv_Coma(ChebConv):
         return edge_index, -deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
 
 
+    # Version 1 (legacy) rebuilt the Chebyshev weights by position from self.parameters()[1:7].
+    # That silently (a) shifted the weights by one and dropped the highest-order term in layers
+    # without bias, and (b) truncated every layer to 6 terms when K > 6. Version 2 uses self.lins.
+    _version = 2
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        version = local_metadata.get("version", None)
+        if version is None or version < 2:
+            self._convert_legacy_weights(state_dict, prefix, version)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+                                      missing_keys, unexpected_keys, error_msgs)
+
+    def _convert_legacy_weights(self, state_dict, prefix, version):
+        '''
+        Remaps version-1 weights in place so that the fixed forward reproduces the legacy output:
+        legacy term T_j used the (j+1)-th entry of [bias?, lins.0, lins.1, ...], for at most 6 terms.
+        '''
+        keys = [f"{prefix}lins.{j}.weight" for j in range(len(self.lins))]
+        if not all(k in state_dict for k in keys):
+            return
+
+        if version is None:
+            warnings.warn(
+                f"No version metadata for ChebConv_Coma '{prefix}': assuming a legacy (v1) "
+                "checkpoint and remapping its Chebyshev weights."
+            )
+
+        old = [state_dict[k] for k in keys]
+        offset = 0 if f"{prefix}bias" in state_dict else 1
+        n_used = min(6, len(old) - offset)
+        for j, k in enumerate(keys):
+            state_dict[k] = old[j + offset] if j < n_used else torch.zeros_like(old[j])
+
     def forward(self, x, edge_index, norm, edge_weight=None):
         # Tx_i are Chebyshev polynomials of x, which are computed recursively
         Tx_0 = x # Tx_0 is the identity, i.e. Tx_0(x) == x
+        weights = [lin.weight.t() for lin in self.lins]
 
-        #TOFIX: This is a workaround to make my code work with a newer version of PyTorch (1.10),
-        #since the weight attribute seems to be absent in this version.
-        self.weight = []
-        #TODO: change this range
-        for i in range(1, 7):            
-            try:
-              self.weight.append(next(itertools.islice(self.parameters(), i, None)).t())
-            except:
-              pass
+        out = torch.matmul(Tx_0, weights[0])
 
-        out = torch.matmul(Tx_0, self.weight[0])
-
-        # if self.weight.size(0) > 1:
-        if len(self.weight) > 1:
+        if len(weights) > 1:
             Tx_1 = self.propagate(edge_index, x=Tx_0, norm=norm) # propagate amounts to operator composition
-            out = out + torch.matmul(Tx_1, self.weight[1])
+            out = out + torch.matmul(Tx_1, weights[1])
 
-        # for k in range(2, self.weight.size(0)):
-        for k in range(2, len(self.weight)):
+        for k in range(2, len(weights)):
             Tx_2 = 2 * self.propagate(edge_index, x=Tx_1, norm=norm) - Tx_0 # recursive definition of Chebyshev polynomials
-            out = out + torch.matmul(Tx_2, self.weight[k])
+            out = out + torch.matmul(Tx_2, weights[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
 
         if self.bias is not None:
