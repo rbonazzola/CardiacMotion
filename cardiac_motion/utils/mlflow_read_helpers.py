@@ -159,6 +159,13 @@ class Run():
             # Rebuilt from MLFLOW_URI rather than row.artifact_uri, which mlflow records as an
             # absolute path and which therefore breaks if the run was created on another machine.
             run_base_dir = os.path.join(MLFLOW_URI, str(row.experiment_id), str(row.run_id))
+
+            # Current layout (MLflowArtifactCheckpoint): artifacts/checkpoints/best_model.ckpt
+            best_model = os.path.join(run_base_dir, "artifacts", "checkpoints", "best_model.ckpt")
+            if os.path.exists(best_model):
+                checkpoint_locations[row.run_id] = best_model
+                continue
+
             checkpoints = []
             try:
                 basepath = os.path.join(run_base_dir, "artifacts", "restored_model_checkpoint")
