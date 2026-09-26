@@ -112,15 +112,28 @@ def wall_thickness_distances(x: torch.Tensor, pairs: torch.Tensor) -> torch.Tens
 
 def aggregate_thickness(outputs):
     """
-    Epoch-level wall thickness terms: mean of the per-batch losses (like the other losses), and the
-    mean absolute thickness error over every pair/frame/subject (NaN when there are no pairs).
+    Epoch-level wall thickness terms over every pair/frame/subject (NaN when there are no pairs):
+      loss:    mean of the per-batch losses (like the other losses)
+      mae:     mean absolute thickness error
+      rel_err: total absolute error / total real thickness
+      nrmse:   sqrt(sum of squared errors / sum of squared deviations of the real thickness from
+               its population mean at the same frame and pair), i.e. RMS error relative to that of
+               predicting the population-average thickness curve: 1 = no better, 0 = perfect.
     """
+    nan = torch.tensor(float("nan"))
     loss = torch.stack([x["thickness_loss"] for x in outputs]).mean()
     count = torch.stack([x["thickness_count"] for x in outputs]).sum()
+    if count == 0:
+        return {"loss": loss, "mae": nan, "rel_err": nan, "nrmse": nan}
     abs_err = torch.stack([x["thickness_abs_err_sum"] for x in outputs]).sum()
-    mae = abs_err / count if count > 0 else torch.tensor(float("nan"))
-    return loss, mae
-
+    real = torch.stack([x["thickness_real_sum"] for x in outputs]).sum()
+    sse = torch.stack([x["thickness_sse"] for x in outputs]).sum()
+    n = torch.stack([x["thickness_n_subjects"] for x in outputs]).sum()
+    sum_d = torch.stack([x["thickness_sum_d"] for x in outputs]).sum(0)     # (T, P)
+    sum_d2 = torch.stack([x["thickness_sum_d2"] for x in outputs]).sum(0)   # (T, P)
+    sst = (sum_d2 - sum_d ** 2 / n).sum()
+    return {"loss": loss, "mae": abs_err / count, "rel_err": abs_err / real,
+            "nrmse": torch.sqrt(sse / sst) if sst > 0 else nan}
 
 def build_laplacian(faces: np.ndarray, n_verts: int) -> torch.Tensor:
     """
@@ -398,12 +411,26 @@ class CoMA_Lightning(pl.LightningModule):
         return self._w_s_ramp.value(self.current_epoch)
 
     def _wall_thickness_terms(self, s_t, shat_t):
-        """(loss, sum of absolute thickness errors, number of distances); zeros without pairs."""
+        """
+        (loss, stats): the wall thickness loss and the per-batch sums aggregate_thickness needs.
+        Zero loss and zero counts without pairs.
+        """
         if self.thickness_pairs is None:
             zero = torch.zeros((), device=s_t.device, dtype=s_t.dtype)
-            return zero, zero, zero
-        error = wall_thickness_distances(shat_t, self.thickness_pairs) - wall_thickness_distances(s_t, self.thickness_pairs)
-        return (error ** 2).mean(), error.abs().sum(), torch.tensor(float(error.numel()), device=s_t.device)
+            return zero, {"thickness_count": zero}
+        real = wall_thickness_distances(s_t, self.thickness_pairs)            # (B, T, P)
+        error = wall_thickness_distances(shat_t, self.thickness_pairs) - real
+        real64 = real.detach().double()
+        stats = {
+            "thickness_count": torch.tensor(float(error.numel()), device=s_t.device),
+            "thickness_abs_err_sum": error.abs().sum(),
+            "thickness_real_sum": real.sum(),
+            "thickness_sse": (error.detach().double() ** 2).sum(),
+            "thickness_n_subjects": torch.tensor(float(real.shape[0]), dtype=torch.float64, device=s_t.device),
+            "thickness_sum_d": real64.sum(0),         # (T, P)
+            "thickness_sum_d2": (real64 ** 2).sum(0),  # (T, P)
+        }
+        return (error ** 2).mean(), stats
 
     def loss_weights_are_final(self) -> bool:
         """
@@ -507,7 +534,7 @@ class CoMA_Lightning(pl.LightningModule):
 
         effective_w_smooth = self._effective_w_smooth()
         self.log("w_smooth_effective", effective_w_smooth, on_step=False, on_epoch=True, prog_bar=False, logger=True)
-        thickness_loss, _, _ = self._wall_thickness_terms(s_t, shat_t)
+        thickness_loss, _ = self._wall_thickness_terms(s_t, shat_t)
         train_loss = recon_loss + self._effective_w_kl() * kld_loss + effective_w_smooth * smooth_loss \
                      + self.w_thickness * thickness_loss
         
@@ -604,7 +631,7 @@ class CoMA_Lightning(pl.LightningModule):
 
         # content
         recon_loss_c = self.rec_loss(time_avg_s, time_avg_s_hat)
-        recon_loss_s, _, _ = self._recon_loss_s_split(s_t, shat_t)
+        recon_loss_s, recon_loss_s_translation, recon_loss_s_shape = self._recon_loss_s_split(s_t, shat_t)
         recon_loss = recon_loss_c + self._effective_w_s() * recon_loss_s
 
         smooth_loss = laplacian_penalty(shat_t, self.laplacian, self.smooth_mask) if self.laplacian is not None else torch.zeros_like(recon_loss)
@@ -626,7 +653,7 @@ class CoMA_Lightning(pl.LightningModule):
             kld_loss = kld_loss_c = kld_loss_s = torch.zeros_like(recon_loss)
             loss = recon_loss + self._effective_w_smooth() * smooth_loss
 
-        thickness_loss, thickness_abs_err_sum, thickness_count = self._wall_thickness_terms(s_t, shat_t)
+        thickness_loss, thickness_stats = self._wall_thickness_terms(s_t, shat_t)
         loss = loss + self.w_thickness * thickness_loss
 
         recon_error = mse(s_t, shat_t)
@@ -644,7 +671,9 @@ class CoMA_Lightning(pl.LightningModule):
             "rec_err_sum": recon_error.sum(), "dev_static_sum": mse_mesh_to_tmp_mean.sum(),
             "vertex_dev_sum": vertex_dev.sum(), "vertex_count": torch.tensor(float(vertex_dev.numel())),
             "thickness_loss": thickness_loss,
-            "thickness_abs_err_sum": thickness_abs_err_sum, "thickness_count": thickness_count,
+            **thickness_stats,
+            # recon_loss_s = translation_weight * translation + shape_weight * shape
+            "recon_loss_s_translation": recon_loss_s_translation, "recon_loss_s_shape": recon_loss_s_shape,
         }
 
         # Only computable when template_mesh was provided to the dataset
@@ -693,6 +722,8 @@ class CoMA_Lightning(pl.LightningModule):
         avg_recon_loss = torch.stack([x["val_recon_loss"] for x in self.val_outputs]).mean()
         avg_recon_loss_c = torch.stack([x["val_recon_loss_c"] for x in self.val_outputs]).mean()
         avg_recon_loss_s = torch.stack([x["val_recon_loss_s"] for x in self.val_outputs]).mean()
+        avg_recon_loss_s_translation = torch.stack([x["recon_loss_s_translation"] for x in self.val_outputs]).mean()
+        avg_recon_loss_s_shape = torch.stack([x["recon_loss_s_shape"] for x in self.val_outputs]).mean()
         avg_smooth_loss = torch.stack([x["val_smooth_loss"] for x in self.val_outputs]).mean()
         avg_loss = torch.stack([x["val_loss"] for x in self.val_outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["val_rec_ratio_to_time_mean"] for x in self.val_outputs]).mean()
@@ -700,7 +731,8 @@ class CoMA_Lightning(pl.LightningModule):
         rec_ratio_to_pop_mean_c = torch.stack([x["val_rec_ratio_to_pop_mean_c"] for x in self.val_outputs]).mean()
         rec_ratio_to_time_mean_pooled = pooled_ratio(self.val_outputs)
         mean_vertex_dev = pooled_mean_vertex_dev(self.val_outputs)
-        thickness_loss, thickness_mae = aggregate_thickness(self.val_outputs)
+        thickness = aggregate_thickness(self.val_outputs)
+        thickness_loss = thickness["loss"]
 
         if not self.trainer.sanity_checking:
             self._update_ramps(avg_recon_loss_c.item(), avg_recon_loss_s.item())
@@ -716,13 +748,14 @@ class CoMA_Lightning(pl.LightningModule):
             "val_recon_loss": avg_recon_loss,
             "val_recon_loss_c": avg_recon_loss_c,
             "val_recon_loss_s": avg_recon_loss_s,
+            "val_recon_loss_s_translation": avg_recon_loss_s_translation,
+            "val_recon_loss_s_shape": avg_recon_loss_s_shape,
             "val_smooth_loss": avg_smooth_loss,
             "val_loss": avg_loss,
             "val_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
             "val_rec_ratio_to_time_mean_pooled": rec_ratio_to_time_mean_pooled,
             "val_mean_vertex_dev": mean_vertex_dev,
             "val_thickness_loss": thickness_loss,
-            "val_thickness_mae": thickness_mae,
             "val_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
             "val_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
           },
@@ -730,6 +763,10 @@ class CoMA_Lightning(pl.LightningModule):
           prog_bar=True,
           logger=True
         )
+        if self.thickness_pairs is not None:  # undefined (NaN) without epi/endo pairs
+            self.log_dict({"val_thickness_mae": thickness["mae"], "val_thickness_rel_err": thickness["rel_err"],
+                           "val_thickness_nrmse": thickness["nrmse"]},
+                          on_epoch=True, logger=True)
 
         self.val_outputs.clear()
 
@@ -765,6 +802,8 @@ class CoMA_Lightning(pl.LightningModule):
         avg_recon_loss = torch.stack([x["test_recon_loss"] for x in self.test_outputs]).mean()
         avg_recon_loss_c = torch.stack([x["test_recon_loss_c"] for x in self.test_outputs]).mean()
         avg_recon_loss_s = torch.stack([x["test_recon_loss_s"] for x in self.test_outputs]).mean()
+        avg_recon_loss_s_translation = torch.stack([x["recon_loss_s_translation"] for x in self.test_outputs]).mean()
+        avg_recon_loss_s_shape = torch.stack([x["recon_loss_s_shape"] for x in self.test_outputs]).mean()
         avg_smooth_loss = torch.stack([x["test_smooth_loss"] for x in self.test_outputs]).mean()
         avg_loss = torch.stack([x["test_loss"] for x in self.test_outputs]).mean()
         rec_ratio_to_time_mean = torch.stack([x["test_rec_ratio_to_time_mean"] for x in self.test_outputs]).mean()
@@ -772,23 +811,28 @@ class CoMA_Lightning(pl.LightningModule):
         rec_ratio_to_pop_mean_c = torch.stack([x["test_rec_ratio_to_pop_mean_c"] for x in self.test_outputs]).mean()
         rec_ratio_to_time_mean_pooled = pooled_ratio(self.test_outputs)
         mean_vertex_dev = pooled_mean_vertex_dev(self.test_outputs)
-        thickness_loss, thickness_mae = aggregate_thickness(self.test_outputs)
+        thickness = aggregate_thickness(self.test_outputs)
+        thickness_loss = thickness["loss"]
         
         loss_dict = {
           "test_kld_loss": avg_kld_loss, 
           "test_recon_loss": avg_recon_loss,
           "test_recon_loss_c": avg_recon_loss_c,
           "test_recon_loss_s": avg_recon_loss_s,
+          "test_recon_loss_s_translation": avg_recon_loss_s_translation,
+          "test_recon_loss_s_shape": avg_recon_loss_s_shape,
           "test_smooth_loss": avg_smooth_loss,
           "test_loss": avg_loss,
           "test_rec_ratio_to_time_mean": rec_ratio_to_time_mean,
           "test_rec_ratio_to_time_mean_pooled": rec_ratio_to_time_mean_pooled,
           "test_mean_vertex_dev": mean_vertex_dev,
           "test_thickness_loss": thickness_loss,
-          "test_thickness_mae": thickness_mae,
           "test_rec_ratio_to_pop_mean": rec_ratio_to_pop_mean,
           "test_rec_ratio_to_pop_mean_c": rec_ratio_to_pop_mean_c
         }
+        if self.thickness_pairs is not None:  # undefined (NaN) without epi/endo pairs
+            loss_dict.update({"test_thickness_mae": thickness["mae"], "test_thickness_rel_err": thickness["rel_err"],
+                              "test_thickness_nrmse": thickness["nrmse"]})
 
         self.log_dict(loss_dict)        
         self.test_outputs.clear()

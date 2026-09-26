@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, "cardiac_motion")
 from lightning_modules.ComaLightningModule import (
-    CoMA_Lightning, build_wall_thickness_pairs, wall_thickness_distances,
+    CoMA_Lightning, aggregate_thickness, build_wall_thickness_pairs, wall_thickness_distances,
 )
 
 
@@ -103,7 +103,67 @@ def test_lightning_module_adds_weighted_thickness_to_val_loss():
 
     model.eval()
     with torch.no_grad():
-        errors = torch.cat([(wall_thickness_distances(model(b["s_t"])[2], pairs) - wall_thickness_distances(b["s_t"], pairs)).flatten()
-                            for b in batches])
+        real = torch.cat([wall_thickness_distances(b["s_t"], pairs).flatten() for b in batches])
+        recon = torch.cat([wall_thickness_distances(model(b["s_t"])[2], pairs).flatten() for b in batches])
+    errors = recon - real
     assert abs(m0["val_thickness_mae"] - errors.abs().mean().item()) < 1e-4 * errors.abs().mean().item()
+    rel_err = errors.abs().sum() / real.sum()
+    assert abs(m0["val_thickness_rel_err"] - rel_err.item()) < 1e-4 * rel_err.item()
+    n_batches = len(batches)
+    real_btp = real.reshape(n_batches * batches[0]["s_t"].shape[0], batches[0]["s_t"].shape[1], -1)
+    errors_btp = errors.reshape(real_btp.shape)
+    nrmse = torch.sqrt((errors_btp ** 2).sum() / ((real_btp - real_btp.mean(0)) ** 2).sum())
+    assert abs(m0["val_thickness_nrmse"] - nrmse.item()) < 1e-3 * nrmse.item()
     assert "thickness_pairs" not in lit_with(1.0).state_dict()  # not saved in checkpoints
+
+
+def _batch_stats(real, recon):
+    """Per-batch sums as CoMA_Lightning._wall_thickness_terms computes them; real/recon: (B, T, P)."""
+    error = recon - real
+    return {
+        "thickness_loss": (error ** 2).mean(), "thickness_count": torch.tensor(float(error.numel())),
+        "thickness_abs_err_sum": error.abs().sum(), "thickness_real_sum": real.sum(),
+        "thickness_sse": (error.double() ** 2).sum(), "thickness_n_subjects": torch.tensor(float(real.shape[0]), dtype=torch.float64),
+        "thickness_sum_d": real.double().sum(0), "thickness_sum_d2": (real.double() ** 2).sum(0),
+    }
+
+
+def test_aggregate_thickness_relative_error_is_ratio_of_totals():
+    # batch 1: walls of 4 mm off by 1 mm; batch 2: walls of 8 mm off by 1 mm
+    real = [torch.full((2, 1, 5), 4.0), torch.full((2, 1, 5), 8.0)]
+    outputs = [_batch_stats(r, r + 1.0) for r in real]
+    agg = aggregate_thickness(outputs)
+    assert abs(agg["mae"].item() - 1.0) < 1e-6
+    assert abs(agg["rel_err"].item() - 20.0 / 120.0) < 1e-6  # not mean(0.25, 0.125)
+
+    no_pairs = [{"thickness_loss": torch.tensor(0.0), "thickness_count": torch.tensor(0.0)}]
+    agg = aggregate_thickness(no_pairs)
+    assert all(torch.isnan(agg[k]) for k in ("mae", "rel_err", "nrmse"))
+
+
+def test_thickness_nrmse_against_population_mean_curve():
+    torch.manual_seed(0)
+    real = 8.0 + torch.randn(30, 4, 20, dtype=torch.float64)  # (subjects, frames, pairs)
+    batches = [real[:12], real[12:]]                            # epoch split in batches of different size
+    population_curve = real.mean(0, keepdim=True)
+
+    perfect = aggregate_thickness([_batch_stats(r, r) for r in batches])
+    mean_curve = aggregate_thickness([_batch_stats(r, population_curve.expand_as(r)) for r in batches])
+    half_way = aggregate_thickness([_batch_stats(r, (r + population_curve) / 2) for r in batches])
+
+    assert perfect["nrmse"].item() == 0.0
+    assert abs(mean_curve["nrmse"].item() - 1.0) < 1e-9  # predicting the population curve scores 1
+    assert abs(half_way["nrmse"].item() - 0.5) < 1e-9
+
+
+def test_thickness_metrics_not_logged_without_pairs():
+    from test_training import build_model, load_fixture, make_batch, make_lit
+
+    A, D, U, n_nodes = load_fixture()
+    lit = make_lit(build_model(A, D, U, n_nodes))  # no thickness pairs
+    torch.manual_seed(0)
+    loader = DataLoader([make_batch(n_nodes[0])], batch_size=None)
+    trainer = pl.Trainer(logger=False, accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    metrics = trainer.validate(lit, loader, verbose=False)[0]
+    assert not any(k in metrics for k in ("val_thickness_mae", "val_thickness_rel_err", "val_thickness_nrmse"))
+    assert metrics["val_thickness_loss"] == 0.0

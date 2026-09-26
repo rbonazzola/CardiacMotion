@@ -223,10 +223,16 @@ class EpochMetricsTableCallback(pl.Callback):
     def on_exception(self, trainer, pl_module, exception):
         self._stop_live()
 
+    # Width used when writing to a file (e.g. SLURM logs), wide enough never to truncate the table
+    FILE_WIDTH = 200
+
     def _get_console(self):
         if self._console is None:
             from rich.console import Console
-            self._console = Console()
+            # Decide from the real stream, not rich's heuristics: e.g. FORCE_COLOR in the environment
+            # makes rich treat a SLURM log file as a terminal (Live control codes, 80-column truncation).
+            is_tty = sys.stdout.isatty()
+            self._console = Console(force_terminal=is_tty, width=None if is_tty else self.FILE_WIDTH)
         return self._console
 
     def _start_live(self):
@@ -296,10 +302,14 @@ class EpochMetricsTableCallback(pl.Callback):
             # unweighted content / style terms (val_recon_loss = rec_c + w_s * rec_s, with w_s ramping)
             self._fmt(self._metric(metrics, "val_recon_loss_c", "val_recon_loss_c_epoch")),
             self._fmt(self._metric(metrics, "val_recon_loss_s", "val_recon_loss_s_epoch")),
+            # rec_s split: per-frame centroid (translation) + centered shape
+            self._fmt(self._metric(metrics, "val_recon_loss_s_translation")),
+            self._fmt(self._metric(metrics, "val_recon_loss_s_shape")),
             self._fmt_w_s(pl_module, metrics),
             self._fmt(self._metric(metrics, "val_rec_ratio_to_time_mean", "val_rec_ratio_to_time_mean_epoch"), digits=3),
             self._fmt(self._metric(metrics, "val_rec_ratio_to_time_mean_pooled"), digits=3),
             self._fmt(self._metric(metrics, "val_mean_vertex_dev"), digits=3),
+            self._fmt(self._metric(metrics, "val_thickness_nrmse"), digits=3),
             self._fmt_lr(trainer),
             self._fmt_time(epoch_secs),
             "*" if improved else "",
@@ -386,10 +396,13 @@ class EpochMetricsTableCallback(pl.Callback):
             "val",
             "rec_c",
             "rec_s",
+            "s_trans",
+            "s_shape",
             "w_s",
             "ratio_t",
             "ratio_tp",
             "vdev",
+            "thk_nrmse",
             "lr",
             "time",
             "best",
@@ -414,10 +427,13 @@ class EpochMetricsTableCallback(pl.Callback):
         table.add_column("val", justify="right")
         table.add_column("rec_c", justify="right")
         table.add_column("rec_s", justify="right")
+        table.add_column("s_trans", justify="right")
+        table.add_column("s_shape", justify="right")
         table.add_column("w_s", justify="right")
         table.add_column("ratio_t", justify="right")
         table.add_column("ratio_tp", justify="right")
         table.add_column("vdev", justify="right")
+        table.add_column("thk_nrmse", justify="right")
         table.add_column("lr", justify="right")
         table.add_column("time", justify="right")
         table.add_column("best", justify="center")

@@ -391,6 +391,24 @@ class TestCardiacMeshFromBValuesDataset(unittest.TestCase):
         np.testing.assert_allclose(item.time_avg_s.numpy(), item.s_t[0].numpy())
         self.assertAlmostEqual(item.d_content[0].item(), 0.0, places=4)
 
+    def test_temporal_mean_time_avg_is_mean_over_frames(self):
+        ds = self._make_dataset(static_shape="temporal_mean")
+        item = self._decode_one(ds, ds.ids.index("S1"))
+        np.testing.assert_allclose(item.time_avg_s.numpy(), item.s_t.mean(dim=0).numpy(), atol=1e-5)
+        # unlike end_diastole, no frame coincides with the static shape
+        self.assertGreater(item.d_content.min().item(), 0.0)
+
+    def test_center_around_own_mean_removes_subject_centroid_only(self):
+        plain = self._decode_one(self._make_dataset(), 0)
+        centered = self._decode_one(self._make_dataset(center_around_own_mean=True), 0)
+        # the subject's centroid over frames and vertices becomes 0 ...
+        np.testing.assert_allclose(centered.s_t.mean(dim=(0, 1)).numpy(), 0.0, atol=1e-4)
+        # ... by one constant shift: shape and within-cycle motion (incl. centroid motion) unchanged
+        shift = (plain.s_t - centered.s_t).reshape(-1, 3)
+        np.testing.assert_allclose(shift.numpy(), np.broadcast_to(shift[0].numpy(), shift.shape), atol=1e-4)
+        np.testing.assert_allclose((plain.time_avg_s - centered.time_avg_s).numpy(),
+                                   np.broadcast_to(shift[0].numpy(), plain.time_avg_s.shape), atol=1e-4)
+
     def test_batched_decode_matches_per_subject_decode(self):
         """decode_batch on a real multi-subject batch (as the DataLoader would
         actually produce via default collation) must match decoding each

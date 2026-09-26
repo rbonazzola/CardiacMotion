@@ -292,7 +292,13 @@ if __name__ == "__main__":
     my_args.add_argument("--n_timeframes", type=int, default=50)
     my_args.add_argument("--use-closed-chambers", default=True, action='store_true')
     my_args.add_argument("--static_representative", type=str, default="end_diastole",
-                         help="Currently, only 'end_diastole' and 'temporal_mean' are supported.")
+                         choices=["end_diastole", "temporal_mean"],
+                         help="Static shape the content decoder reconstructs (and reference for ratio_t): "
+                              "the end-diastolic frame, or the subject's temporal mean shape.")
+    my_args.add_argument("--center_around_own_mean", "--center-around-own-mean", default=False, action="store_true",
+                         help="Subtract each subject's own centroid (mean over frames and vertices) from its sequence: "
+                              "removes the subject's absolute position, keeping its shape and within-cycle motion "
+                              "(including the centroid's motion over the cycle). Compatible with --w_thickness.")
     my_args.add_argument("--center_around_mean", "--center-around-mean", default=False,
                          action='store_true',
                          help="Subtract the population mean shape from all meshes before training. "
@@ -329,6 +335,10 @@ if __name__ == "__main__":
                               "1 (default) is the original single-frequency embedding. The decoder input "
                               "grows to latent_dim_c + 2 * K * latent_dim_s, so K > 1 is not "
                               "checkpoint-compatible with runs trained with K = 1.")
+    my_args.add_argument("--translation_head_hidden", "--translation-head-hidden", type=int, nargs="*", default=[],
+                         help="Hidden layer sizes of the translation head (requires --translation_head), e.g. "
+                              "'128 128' for an MLP Linear-ReLU-Linear-ReLU-Linear. Empty (default): a single "
+                              "Linear layer, as before (checkpoint-compatible with earlier runs).")
     my_args.add_argument("--translation_head", default=False, action="store_true",
                          help="Give the style decoder an explicit per-frame rigid-translation output "
                               "(a small Linear on the same latent used for the mesh, added to the "
@@ -367,6 +377,8 @@ if __name__ == "__main__":
         logger.info("Global seed set to %d", config.seed)
 
     config.batch_size_schedule = args.batch_size_schedule
+    config.static_representative = args.static_representative
+    config.center_around_own_mean = args.center_around_own_mean
     config.n_timeframes = args.n_timeframes
 
     # https://stackoverflow.com/questions/38884513/python-argparse-how-can-i-get-namespace-objects-for-argument-groups-separately
@@ -448,7 +460,9 @@ if __name__ == "__main__":
                 N_subj=N_subj,
                 phases_filter=phases_filter,
                 template_mesh=mesh_template,
+                static_shape=args.static_representative,
                 center_around_mean=args.center_around_mean,
+                center_around_own_mean=args.center_around_own_mean,
             )
         else:
             logger.info("Using cardiac mesh root: %s", cardio_mesh.MESHES_DIR)
@@ -460,7 +474,9 @@ if __name__ == "__main__":
                 template_mesh=mesh_template,
                 N_subj=N_subj,
                 phases_filter=phases_filter,
+                static_shape=args.static_representative,
                 center_around_mean=args.center_around_mean,
+                center_around_own_mean=args.center_around_own_mean,
             )
     logger.info("Dataset ready: subjects=%d, frames_per_subject=%d, vertices=%d, faces=%d",
                 len(cardiac_dataset), len(phases_filter), mesh_template.v.shape[0], mesh_template.f.shape[0])
@@ -474,6 +490,9 @@ if __name__ == "__main__":
     
     with log_step("Building model and COMA matrices"):
         config.network_architecture.translation_head = args.translation_head
+        if args.translation_head_hidden and not args.translation_head:
+            raise ValueError("--translation_head_hidden requires --translation_head")
+        config.network_architecture.translation_head_hidden = args.translation_head_hidden
         config.network_architecture.n_harmonics = args.n_harmonics
         model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
         if args.compile:

@@ -173,6 +173,7 @@ class AutoencoderTemporalSequence(nn.Module):
                 decoder_style   = DecoderStyle.build_from_dictionary(
                     coma_args, phase_embedding_method=phase_embedding_method, n_timeframes=n_timeframes,
                     translation_head=bool(config.network_architecture.get("translation_head", False)),
+                    translation_head_hidden=list(config.network_architecture.get("translation_head_hidden", None) or []),
                     n_harmonics=int(config.network_architecture.get("n_harmonics", 1)),
                 ),
                 is_variational=coma_args.is_variational),
@@ -312,6 +313,7 @@ class DecoderStyle(nn.Module):
                  phase_embedding_method: PHASE_EMBEDDINGS = "exp", 
                  n_timeframes: Union[int, None]=None,
                  translation_head: bool = False,
+                 translation_head_hidden: Sequence[int] = (),
                  n_harmonics: int = 1):
 
         super(DecoderStyle, self).__init__()
@@ -337,10 +339,26 @@ class DecoderStyle(nn.Module):
         # graph-conv decoder with no notion of "shift everything together".
         # Zero-initialized so it starts as a no-op (matches this codebase's
         # existing near-zero-init convention for new output heads).
-        self.translation_head = torch.nn.Linear(combined_latent_dim, 3) if translation_head else None
-        if self.translation_head is not None:
-            torch.nn.init.zeros_(self.translation_head.weight)
-            torch.nn.init.zeros_(self.translation_head.bias)
+        self.translation_head = self._build_translation_head(combined_latent_dim, translation_head_hidden) if translation_head else None
+
+
+    @staticmethod
+    def _build_translation_head(in_features, hidden=()):
+        """
+        Per-frame rigid translation from the style decoder's latent: a single Linear (hidden=()),
+        or an MLP with ReLU hidden layers of the given sizes. The output layer is zero-initialized
+        so the head starts as a no-op. hidden=() keeps the original Linear, with the same state
+        dict keys, so existing checkpoints still load.
+        """
+        sizes = [in_features, *hidden, 3]
+        layers = []
+        for i in range(len(sizes) - 1):
+            layers.append(torch.nn.Linear(sizes[i], sizes[i + 1]))
+            if i < len(sizes) - 2:
+                layers.append(torch.nn.ReLU())
+        torch.nn.init.zeros_(layers[-1].weight)
+        torch.nn.init.zeros_(layers[-1].bias)
+        return layers[0] if len(layers) == 1 else torch.nn.Sequential(*layers)
 
 
     def  _get_phase_embedding(self, phase_embedding_method, n_timeframes):
@@ -383,9 +401,11 @@ class DecoderStyle(nn.Module):
     
 
     @classmethod
-    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes, translation_head=False, n_harmonics=1):
+    def build_from_dictionary(cls, config_dict, phase_embedding_method, n_timeframes, translation_head=False, n_harmonics=1,
+                              translation_head_hidden=()):
         dec_config = {k: v for k, v in config_dict.items() if k in DECODER_S_ARGS}
-        return cls(dec_config, phase_embedding_method, n_timeframes, translation_head=translation_head, n_harmonics=n_harmonics)
+        return cls(dec_config, phase_embedding_method, n_timeframes, translation_head=translation_head, n_harmonics=n_harmonics,
+                   translation_head_hidden=translation_head_hidden)
       
             
 class DecoderTemporalSequence(nn.Module):

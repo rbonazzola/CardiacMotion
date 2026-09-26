@@ -19,6 +19,16 @@ def get_mlflow_parameters(config):
         "w_smooth": getattr(getattr(loss, "smoothness", None), "weight", None),
         "w_thickness": getattr(getattr(loss, "thickness", None), "weight", None),
     }
+    # Loss-weight ramps: without these, runs with and without a ramp look identical in MLflow
+    rec_s, smooth = loss.reconstruction_s, getattr(loss, "smoothness", None)
+    loss_params.update({
+        "w_s_start": getattr(rec_s, "start_weight", None),
+        "w_s_ramp_epochs": getattr(rec_s, "ramp_epochs", None),
+        "w_s_content_patience": getattr(rec_s, "content_patience", None),
+        "w_s_content_min_delta": getattr(rec_s, "content_min_delta", None),
+        "w_smooth_start": getattr(smooth, "start_weight", None),
+        "w_smooth_ramp_epochs": getattr(smooth, "ramp_epochs", None),
+    })
     transformer_cfg = net.get("transformer", {}) if hasattr(net, "get") else {}
     net_params = {
         "latent_dim_s": net.latent_dim_s,
@@ -31,6 +41,7 @@ def get_mlflow_parameters(config):
         "reduction_factors": net.pooling.parameters.downsampling_factors,
         "phase_input": net.phase_input,
         "translation_head": getattr(net, "translation_head", False),
+        "translation_head_hidden": getattr(net, "translation_head_hidden", None) or [],
         "n_harmonics": getattr(net, "n_harmonics", 1),
         # only meaningful when z_aggr_function=transformer; None/missing for fcn runs
         "transformer_n_layers": transformer_cfg.get("n_layers", None),
@@ -44,6 +55,8 @@ def get_mlflow_parameters(config):
     mlflow_parameters = {
         "platform": check_output(["hostname"]).strip().decode(),
         "seed": getattr(config, "seed", None),
+        "static_representative": getattr(config, "static_representative", None),
+        "center_around_own_mean": getattr(config, "center_around_own_mean", False),
         "batch_size": getattr(config, "batch_size", None),
         "batch_size_schedule": getattr(config, "batch_size_schedule", None),
         "n_timeframes": getattr(config, "n_timeframes", None),

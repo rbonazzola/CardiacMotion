@@ -59,3 +59,22 @@ def test_validation_logs_mean_vertex_dev():
     assert abs(metrics["val_mean_vertex_dev"] - distances.mean().item()) < 1e-4 * distances.mean().item()
     # mean of distances <= RMS distance (sqrt of the per-vertex squared-distance loss)
     assert metrics["val_mean_vertex_dev"] <= (distances ** 2).mean().sqrt().item() + 1e-6
+
+
+def test_validation_logs_rec_s_translation_shape_split():
+    A, D, U, n_nodes = load_fixture()
+    lit = make_lit(build_model(A, D, U, n_nodes))
+    torch.manual_seed(0)
+    batches = [make_batch(n_nodes[0]) for _ in range(3)]
+    trainer = pl.Trainer(logger=False, accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    metrics = trainer.validate(lit, DataLoader(batches, batch_size=None), verbose=False)[0]
+
+    # translation_weight = shape_weight = 1: the two parts add up to rec_s exactly
+    total = metrics["val_recon_loss_s_translation"] + metrics["val_recon_loss_s_shape"]
+    assert abs(total - metrics["val_recon_loss_s"]) < 1e-4 * metrics["val_recon_loss_s"]
+
+    lit.eval()
+    with torch.no_grad():
+        centroid_err = [((b["s_t"].mean(-2) - lit(b["s_t"])[2].mean(-2)) ** 2).sum(-1).mean() for b in batches]
+    expected = torch.stack(centroid_err).mean().item()
+    assert abs(metrics["val_recon_loss_s_translation"] - expected) < 1e-4 * expected
