@@ -18,13 +18,13 @@ from utils.pretrained import load_pretrained, phase_index_map, remap_per_frame_b
 from test_training import load_fixture, N_FEATURES, LATENT_DIM_C, LATENT_DIM_S, LATENT_DIM, BATCH_SIZE, FILTERS
 
 
-def _model(n_timeframes, aggregator="transformer"):
+def _model(n_timeframes, aggregator="transformer", shared_batch_norm=False):
     A, D, U, n_nodes = load_fixture()
     template = EasyDict({"v": torch.zeros(n_nodes[0], N_FEATURES).numpy()})
     common = dict(num_features=N_FEATURES, n_layers=len(FILTERS), n_nodes=n_nodes, cheb_polynomial_order=[3] * len(FILTERS),
                   is_variational=False, template=template, adjacency_matrices=A)
     encoder3d = Encoder3DMesh(phase_input=False, num_conv_filters_enc=FILTERS, downsample_matrices=D, latent_dim=None,
-                              n_timeframes=n_timeframes, **common)
+                              n_timeframes=n_timeframes, batch_norm_across_time=shared_batch_norm, **common)
     h = encoder3d.forward_conv_stack(torch.zeros(1, n_timeframes, n_nodes[0], N_FEATURES), preserve_graph_structure=False)
     z_aggr = (TransformerAggregator(features_in=h.shape[-1], features_out=LATENT_DIM, n_timeframes=n_timeframes,
                                     d_model=16, n_heads=2, n_layers=1, d_ff=32)
@@ -124,3 +124,22 @@ def test_resolve_checkpoint_from_mlflow_run_id(tmp_path):
     assert resolve_checkpoint(run.info.run_id, tracking_uri) == str(artifacts / "best_model.ckpt")
     with pytest.raises(FileNotFoundError):
         resolve_checkpoint("not-a-run-nor-a-file", tracking_uri)
+
+
+def test_shared_batch_norm_checkpoint_loads_for_any_number_of_frames(tmp_path):
+    pretrained, n_nodes = _model(n_timeframes=4, shared_batch_norm=True)
+    ckpt = tmp_path / "shared.ckpt"
+    _save_lightning_checkpoint(pretrained, ckpt)
+
+    finetune, _ = _model(n_timeframes=8, shared_batch_norm=True)
+    info = load_pretrained(finetune, str(ckpt), n_timeframes=8)
+    assert info["n_timeframes_pretrained"] == 8  # nothing to remap
+    for k, v in finetune.state_dict().items():
+        torch.testing.assert_close(v, pretrained.state_dict()[k])
+
+
+def test_per_frame_checkpoint_into_shared_model_explains_the_fix(tmp_path):
+    ckpt = tmp_path / "per_frame.ckpt"
+    _save_lightning_checkpoint(_model(n_timeframes=4)[0], ckpt)
+    with pytest.raises(ValueError, match="--batch_norm all"):
+        load_pretrained(_model(n_timeframes=8, shared_batch_norm=True)[0], str(ckpt), n_timeframes=8)

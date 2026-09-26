@@ -87,10 +87,16 @@ def load_pretrained(model: torch.nn.Module, spec: str, n_timeframes: int, tracki
         raise ValueError("The FCN temporal aggregator's input size depends on n_timeframes, so it can't be "
                          "transferred to a different number of frames: use the transformer aggregator.")
 
+    encoder3d = getattr(getattr(model, "encoder", None), "encoder_3d_mesh", None)
+    shared_batch_norm = getattr(encoder3d, "batch_norm_across_time", False)
+
     n_old = None
     for key, tensor in state_dict.items():
         if not _PER_FRAME_BN.search(key) or key not in target or tensor.shape == target[key].shape:
             continue
+        if shared_batch_norm:
+            raise ValueError("The checkpoint's encoder has per-frame batch norm but the model's is shared across frames: "
+                             "pass --batch_norm all to fine-tune it (its batch norm is then remapped to the new number of frames).")
         n_channels, rest = divmod(target[key].numel(), n_timeframes)
         assert rest == 0, f"{key}: {target[key].numel()} features are not a multiple of {n_timeframes} frames"
         layer_n_old, rest = divmod(tensor.numel(), n_channels)

@@ -317,8 +317,17 @@ class Run():
         config.network_architecture.convolution.parameters.polynomial_degree = [self.get_polynomial_degree()] * 4
         config.network_architecture.pooling.parameters.downsampling_factors = self.get_downsampling_factors()
         config.loss.regularization.weight = 0
-        
+        # runs from before --batch_norm existed used per-frame batch norm in the encoder ("all")
+        config.network_architecture.batch_norm = self.get_param("batch_norm", default="all")
+
         return config
+
+    def get_param(self, name, default=None):
+        """A run parameter as logged by MLflow (params/<name> in the run directory), or `default`."""
+        path = os.path.join(self.RUN_BASE_DIR, "params", name)
+        if not os.path.exists(path):
+            return default
+        return open(path, "rt").read().strip()
 
 
     def build_model_from_checkpoint(self):

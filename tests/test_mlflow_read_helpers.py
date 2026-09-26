@@ -40,3 +40,12 @@ def test_rename_state_dict_keys_keeps_module_metadata():
     renamed = _rename_state_dict_keys(prefixed, "model.", "")
     assert list(renamed) == list(state_dict)
     assert renamed._metadata["0"] == state_dict._metadata["0"]  # module versions survive the renaming
+
+
+def test_run_param_batch_norm_defaults_to_all_for_older_runs(tmp_path):
+    run = Run.__new__(Run)  # without __init__, which loads the whole run
+    run.RUN_BASE_DIR = str(tmp_path)
+    assert run.get_param("batch_norm", default="all") == "all"
+    os.makedirs(tmp_path / "params")
+    (tmp_path / "params" / "batch_norm").write_text("shared")
+    assert run.get_param("batch_norm", default="all") == "shared"

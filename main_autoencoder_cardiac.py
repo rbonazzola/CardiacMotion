@@ -341,11 +341,12 @@ if __name__ == "__main__":
                               "or a .ckpt path, then train as usual (fresh optimizer). The architecture flags must match "
                               "the pretrained model's. --n_timeframes may differ (transformer aggregator only): the "
                               "encoder's per-frame batch norm is remapped to the closest cardiac phase.")
-    my_args.add_argument("--batch_norm", "--batch-norm", default="all", choices=["all", "shared", "decoders", "none"],
-                         help="Batch normalization: 'all' (encoder and decoders, default; the encoder's is per frame "
-                              "and channel, which ties the model to n_timeframes), 'shared' (encoder's per channel, with "
-                              "statistics pooled across frames: with the transformer aggregator the model then works with "
-                              "any number of frames), 'decoders' (none in the encoder), or 'none'.")
+    my_args.add_argument("--batch_norm", "--batch-norm", default="shared", choices=["all", "shared", "decoders", "none"],
+                         help="Batch normalization: 'shared' (default: the encoder's is per channel, with statistics "
+                              "pooled across frames, so with the transformer aggregator the model works with any number "
+                              "of frames), 'all' (the encoder's is per frame and channel, which ties the model to "
+                              "n_timeframes; runs before this option existed used it), 'decoders' (none in the "
+                              "encoder), or 'none'. The decoders' batch norm is per channel except with 'none'.")
     my_args.add_argument("--translation_head_hidden", "--translation-head-hidden", type=int, nargs="*", default=[],
                          help="Hidden layer sizes of the translation head (requires --translation_head), e.g. "
                               "'128 128' for an MLP Linear-ReLU-Linear-ReLU-Linear. Empty (default): a single "
