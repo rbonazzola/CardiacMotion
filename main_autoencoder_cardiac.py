@@ -25,6 +25,7 @@ from lightning_modules.ComaLightningModule import CoMA_Lightning, build_wall_thi
 from data.DataModules import CardiacMeshPopulationDataset, CardiacMeshFromBValuesDataset, CardiacMeshPopulationDM, BatchSizeScheduler
 
 
+from utils.pretrained import load_pretrained
 from utils.mlflow_write_helpers import (
     get_mlflow_parameters, 
     get_mlflow_dataset_params,
@@ -335,6 +336,16 @@ if __name__ == "__main__":
                               "1 (default) is the original single-frequency embedding. The decoder input "
                               "grows to latent_dim_c + 2 * K * latent_dim_s, so K > 1 is not "
                               "checkpoint-compatible with runs trained with K = 1.")
+    my_args.add_argument("--init_from_checkpoint", "--init-from-checkpoint", type=str, default=None,
+                         help="Initialize the model from a pretrained checkpoint: an MLflow run ID (its best_model.ckpt) "
+                              "or a .ckpt path, then train as usual (fresh optimizer). The architecture flags must match "
+                              "the pretrained model's. --n_timeframes may differ (transformer aggregator only): the "
+                              "encoder's per-frame batch norm is remapped to the closest cardiac phase.")
+    my_args.add_argument("--batch_norm", "--batch-norm", default="all", choices=["all", "shared", "decoders", "none"],
+                         help="Batch normalization: 'all' (encoder and decoders, default; the encoder's is per frame "
+                              "and channel, which ties the model to n_timeframes), 'shared' (encoder's per channel, with "
+                              "statistics pooled across frames: with the transformer aggregator the model then works with "
+                              "any number of frames), 'decoders' (none in the encoder), or 'none'.")
     my_args.add_argument("--translation_head_hidden", "--translation-head-hidden", type=int, nargs="*", default=[],
                          help="Hidden layer sizes of the translation head (requires --translation_head), e.g. "
                               "'128 128' for an MLP Linear-ReLU-Linear-ReLU-Linear. Empty (default): a single "
@@ -494,7 +505,14 @@ if __name__ == "__main__":
             raise ValueError("--translation_head_hidden requires --translation_head")
         config.network_architecture.translation_head_hidden = args.translation_head_hidden
         config.network_architecture.n_harmonics = args.n_harmonics
+        config.network_architecture.batch_norm = args.batch_norm
         model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
+        if args.init_from_checkpoint:
+            # Look run IDs up in this project's MLflow store (not $MLFLOW_TRACKING_URI), even with logging disabled
+            tracking_uri = config.mlflow.tracking_uri if config.mlflow else os.path.abspath("mlruns")
+            pretrained = load_pretrained(model, args.init_from_checkpoint, args.n_timeframes, tracking_uri)
+            config.init_from_checkpoint = pretrained["path"]
+            config.init_n_timeframes = pretrained["n_timeframes_pretrained"]
         if args.compile:
             if args.compile_cache_size_limit is not None:
                 torch._dynamo.config.cache_size_limit = args.compile_cache_size_limit

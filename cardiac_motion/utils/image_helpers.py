@@ -2,7 +2,6 @@ import numpy as np
 from PIL import Image
 import imageio
 import os
-import pyvista as pv
 
 from tqdm import tqdm
 

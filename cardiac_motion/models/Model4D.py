@@ -73,8 +73,9 @@ COMMON_ARGS = [
 
 
 ENCODER_ARGS   = COMMON_ARGS + ["phase_input", "downsample_matrices", "num_conv_filters_enc", "latent_dim_c", "latent_dim_s"]
-DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content"]
-DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style"]
+DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content", "batch_normalization"]
+DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style", "batch_normalization"]
+BATCH_NORM_OPTIONS = ("all", "shared", "decoders", "none")
 
 
 class AutoencoderTemporalSequence(nn.Module):
@@ -130,8 +131,18 @@ class AutoencoderTemporalSequence(nn.Module):
         coma_matrices = get_coma_matrices(config, mesh_template, partition)
         (coma_args := get_coma_args(config)).update(coma_matrices)
       
+        # batch_norm: "all" (default: the encoder's batch norm is per frame and channel, the only part
+        # of a transformer-aggregator model tied to n_timeframes), "shared" (encoder batch norm per
+        # channel, pooled across frames: works for any number of frames), "decoders" (none in the
+        # encoder), "none".
+        batch_norm = config.network_architecture.get("batch_norm", "all")
+        if batch_norm not in BATCH_NORM_OPTIONS:
+            raise ValueError(f"batch_norm={batch_norm!r}, expected one of {BATCH_NORM_OPTIONS}")
+        coma_args["batch_normalization"] = batch_norm != "none"  # decoders
+
         enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
-        encoder = Encoder3DMesh(**enc_config, n_timeframes=n_timeframes)
+        encoder = Encoder3DMesh(**enc_config, n_timeframes=n_timeframes, batch_normalization=batch_norm in ("all", "shared"),
+                                batch_norm_across_time=batch_norm == "shared")
 
         assert "latent_dim" not in enc_config or enc_config.latent_dim == config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s, f"{latent_dim=} but it should equal the sum of {config.network_architecture.latent_dim_c=} and {config.network_architecture.latent_dim_s=}"
 

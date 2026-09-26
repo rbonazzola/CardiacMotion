@@ -10,12 +10,23 @@ from typing import Sequence, Union, List
 #TODO: Implement common parent class for encoder and decoder (GraphConvStack?), to capture common behaviour.
 
 class ParallelBatchNorm1d(nn.Module):
+    '''
+    Batch norm for (batch, [time,] vertices, channels) inputs. By default a 4D input is normalized
+    per (frame, channel), so num_features = n_timeframes * n_channels and the module is tied to the
+    number of frames. With across_time=True (num_features = n_channels) each channel is normalized
+    with statistics pooled over batch, vertices and all frames, for any number of frames.
+    '''
 
-    def __init__(self, num_features):
+    def __init__(self, num_features, across_time=False):
         super(ParallelBatchNorm1d, self).__init__()
         self.batch_norm = nn.BatchNorm1d(num_features)
-        
+        self.across_time = across_time
+
     def forward(self, x):
+        if len(x.size()) == 4 and self.across_time:
+            batch_size, n_timepoints, n_vertices, n_channels = x.size()
+            return self.batch_norm(x.reshape(-1, n_channels)).view(batch_size, n_timepoints, n_vertices, n_channels)
+
         # x shape: (batch_size, channels, sequence_length)
         if len(x.size()) == 4:
             batch_size, n_timepoints, n_vertices, n_channels = x.size()
@@ -107,7 +118,8 @@ class Encoder3DMesh(nn.Module):
         latent_dim: Union[None, int] = None,
         batch_normalization = True,
         n_timeframes = 1, 
-        activation_layers="ReLU"):
+        activation_layers="ReLU",
+        batch_norm_across_time = False):
 
         super(Encoder3DMesh, self).__init__()
 
@@ -117,6 +129,7 @@ class Encoder3DMesh(nn.Module):
         self.filters_enc.insert(0, num_features)
         self.K = cheb_polynomial_order
         self.batch_normalization = batch_normalization
+        self.batch_norm_across_time = batch_norm_across_time
 
         self.n_timeframes = n_timeframes
         self.matrices = {}
@@ -157,7 +170,10 @@ class Encoder3DMesh(nn.Module):
             encoder[layer]["graph_conv"] = cheb_conv_layers[i]
             encoder[layer]["pool"] = pool_layers[i]
             if self.batch_normalization:
-                encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.n_timeframes*self.filters_enc[i+1])
+                if self.batch_norm_across_time:
+                    encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.filters_enc[i+1], across_time=True)
+                else:
+                    encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.n_timeframes*self.filters_enc[i+1])
             encoder[layer]["activation_function"] = activation_layers[i]
 
         return encoder

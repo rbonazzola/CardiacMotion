@@ -43,6 +43,7 @@ def get_mlflow_parameters(config):
         "translation_head": getattr(net, "translation_head", False),
         "translation_head_hidden": getattr(net, "translation_head_hidden", None) or [],
         "n_harmonics": getattr(net, "n_harmonics", 1),
+        "batch_norm": getattr(net, "batch_norm", "all"),
         # only meaningful when z_aggr_function=transformer; None/missing for fcn runs
         "transformer_n_layers": transformer_cfg.get("n_layers", None),
         "transformer_d_model": transformer_cfg.get("d_model", None),
@@ -57,6 +58,8 @@ def get_mlflow_parameters(config):
         "seed": getattr(config, "seed", None),
         "static_representative": getattr(config, "static_representative", None),
         "center_around_own_mean": getattr(config, "center_around_own_mean", False),
+        "init_from_checkpoint": getattr(config, "init_from_checkpoint", None),
+        "init_n_timeframes": getattr(config, "init_n_timeframes", None),
         "batch_size": getattr(config, "batch_size", None),
         "batch_size_schedule": getattr(config, "batch_size_schedule", None),
         "n_timeframes": getattr(config, "n_timeframes", None),

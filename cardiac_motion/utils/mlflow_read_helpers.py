@@ -29,7 +29,6 @@ from cardio_mesh import (
 from cardio_mesh.paths import (
     get_mean_shape,
     get_procrustes_file,
-    get_procrustes_transforms,
     get_subsetting_matrix
 )
 
@@ -38,7 +37,6 @@ from cardio_mesh.procrustes import transform_mesh
 from cardiac_motion import PKG_DIR, MLFLOW_URI
 from cardiac_motion import AutoencoderTemporalSequence
 
-from .image_helpers import generate_gif, merge_gifs_horizontally
 
 from config.load_config import load_yaml_config
 
@@ -58,8 +56,9 @@ def _rename_state_dict_keys(state_dict, old, new):
 
 class Run():
 
-    ONE_RANDOM_ID = "1000511"; END_DIASTOLE = 1
-    template_fhm_mesh: Cardiac3DMesh = cardio_mesh.load_full_heart_mesh(ONE_RANDOM_ID, timeframe=END_DIASTOLE)
+    # Only the faces are used (get_template): the subject-independent topology is enough, and
+    # doesn't read any subject's mesh from disk at import time.
+    template_fhm_mesh: Cardiac3DMesh = cardio_mesh.load_fhm_topology()
 
     expid_to_partition_mapping = { 3: "RV", 4: "LV", 5: "BV", 6: "LA", 7: "RA", 8: "aorta" }
     partition_to_expid_mapping = { v: k for k, v in expid_to_partition_mapping.items() }
