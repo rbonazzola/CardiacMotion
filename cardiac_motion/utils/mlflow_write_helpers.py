@@ -57,6 +57,7 @@ def get_mlflow_parameters(config):
         "platform": check_output(["hostname"]).strip().decode(),
         "seed": getattr(config, "seed", None),
         "static_representative": getattr(config, "static_representative", None),
+        "end_systole_file": getattr(config, "end_systole_file", None),
         "center_around_own_mean": getattr(config, "center_around_own_mean", False),
         "init_from_checkpoint": getattr(config, "init_from_checkpoint", None),
         "init_n_timeframes": getattr(config, "init_n_timeframes", None),

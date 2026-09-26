@@ -293,9 +293,13 @@ if __name__ == "__main__":
     my_args.add_argument("--n_timeframes", type=int, default=50)
     my_args.add_argument("--use-closed-chambers", default=True, action='store_true')
     my_args.add_argument("--static_representative", type=str, default="end_diastole",
-                         choices=["end_diastole", "temporal_mean"],
+                         choices=["end_diastole", "temporal_mean", "end_systole"],
                          help="Static shape the content decoder reconstructs (and reference for ratio_t): "
-                              "the end-diastolic frame, or the subject's temporal mean shape.")
+                              "the end-diastolic frame, the subject's temporal mean shape, or its end-systolic "
+                              "frame (from --end_systole_file; --data_source bvalues only).")
+    my_args.add_argument("--end_systole_file", type=str, default="data/lv_volumes_left_ventricle.csv",
+                         help="Table with each subject's end-systolic frame (es_frame column), written by "
+                              "scripts/compute_lv_volumes.py. Used with --static_representative end_systole.")
     my_args.add_argument("--center_around_own_mean", "--center-around-own-mean", default=False, action="store_true",
                          help="Subtract each subject's own centroid (mean over frames and vertices) from its sequence: "
                               "removes the subject's absolute position, keeping its shape and within-cycle motion "
@@ -390,6 +394,7 @@ if __name__ == "__main__":
 
     config.batch_size_schedule = args.batch_size_schedule
     config.static_representative = args.static_representative
+    config.end_systole_file = args.end_systole_file if args.static_representative == "end_systole" else None
     config.center_around_own_mean = args.center_around_own_mean
     config.n_timeframes = args.n_timeframes
 
@@ -475,8 +480,11 @@ if __name__ == "__main__":
                 static_shape=args.static_representative,
                 center_around_mean=args.center_around_mean,
                 center_around_own_mean=args.center_around_own_mean,
+                end_systole_frames=args.end_systole_file if args.static_representative == "end_systole" else None,
             )
         else:
+            if args.static_representative == "end_systole":
+                raise ValueError("--static_representative end_systole is only supported with --data_source bvalues")
             logger.info("Using cardiac mesh root: %s", cardio_mesh.MESHES_DIR)
             cardiac_dataset = CardiacMeshPopulationDataset(
                 root_path=cardio_mesh.MESHES_DIR,

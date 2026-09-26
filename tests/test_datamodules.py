@@ -288,7 +288,7 @@ class TestCardiacMeshFromBValuesDataset(unittest.TestCase):
         with patch("data.DataModules.cardio_mesh_paths.get_pca_components", return_value=self.pca_components), \
              patch("data.DataModules.cardio_mesh_paths.get_pca_mean", return_value=self.pca_mean):
             return CardiacMeshFromBValuesDataset(
-                params_dir=self.params_dir,
+                params_dir=kwargs.pop("params_dir", self.params_dir),
                 partition="synthetic",
                 procrustes_transforms=self.procrustes_path,
                 **kwargs,
@@ -408,6 +408,44 @@ class TestCardiacMeshFromBValuesDataset(unittest.TestCase):
         np.testing.assert_allclose(shift.numpy(), np.broadcast_to(shift[0].numpy(), shift.shape), atol=1e-4)
         np.testing.assert_allclose((plain.time_avg_s - centered.time_avg_s).numpy(),
                                    np.broadcast_to(shift[0].numpy(), plain.time_avg_s.shape), atol=1e-4)
+
+    def _hdf5_copy(self):
+        """The same subjects as one consolidated .h5 file (the format used for training)."""
+        import h5py
+        ids = sorted(f[:-len(".npz")] for f in os.listdir(self.params_dir) if f.endswith(".npz"))
+        data = [np.load(os.path.join(self.params_dir, f"{sid}.npz")) for sid in ids]
+        path = os.path.join(self.params_dir, "params.h5")
+        with h5py.File(path, "w") as hf:
+            hf["subject_ids"] = np.array(ids, dtype="S")
+            for field in ("bvals", "translation", "qrotation", "scale"):
+                hf[field] = np.stack([d[field] for d in data])
+        return path
+
+    def test_end_systole_static_shape_is_the_given_frame_even_outside_phases_filter(self):
+        es_frames = {"S1": 4, "S2": 2}  # 1-based
+        full = self._make_dataset()     # all T frames
+        for params_dir in (self.params_dir, self._hdf5_copy()):
+            ds = self._make_dataset(static_shape="end_systole", end_systole_frames=es_frames, phases_filter=[1, 3],
+                                    **({"params_dir": params_dir} if params_dir.endswith(".h5") else {}))
+            for sid, frame in es_frames.items():
+                item = self._decode_one(ds, ds.ids.index(sid))
+                reference = self._decode_one(full, full.ids.index(sid))
+                self.assertEqual(item.s_t.shape[0], 2)  # the sequence is still phases_filter's frames
+                np.testing.assert_allclose(item.time_avg_s.numpy(), reference.s_t[frame - 1].numpy(), atol=1e-4)
+
+    def test_end_systole_frames_from_volume_table(self):
+        import pandas as pd
+        table = os.path.join(self.params_dir, "lv_volumes.csv")
+        pd.DataFrame({"subject_id": ["S1", "S2"], "es_frame": [3, 5]}).to_csv(table, index=False)
+        ds = self._make_dataset(static_shape="end_systole", end_systole_frames=table)
+        item = self._decode_one(ds, ds.ids.index("S2"))
+        np.testing.assert_allclose(item.time_avg_s.numpy(), item.s_t[4].numpy(), atol=1e-4)
+
+    def test_end_systole_requires_a_frame_for_every_subject(self):
+        with self.assertRaises(ValueError):
+            self._make_dataset(static_shape="end_systole")                                   # no table
+        with self.assertRaises(ValueError):
+            self._make_dataset(static_shape="end_systole", end_systole_frames={"S1": 2})     # S2 missing
 
     def test_batched_decode_matches_per_subject_decode(self):
         """decode_batch on a real multi-subject batch (as the DataLoader would

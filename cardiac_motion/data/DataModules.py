@@ -2,6 +2,7 @@ import os, sys
 import logging
 import time
 import numpy as np
+import pandas as pd
 import re
 import glob
 import pickle as pkl
@@ -234,6 +235,17 @@ class CardiacMeshPopulationDataset(TensorDataset):
         return len(self.ids)
 
 
+def _load_end_systole_frames(end_systole_frames):
+    """{subject_id: 1-based end-systolic frame} from a mapping or a scripts/compute_lv_volumes.py table."""
+    if end_systole_frames is None:
+        raise ValueError("static_shape='end_systole' requires end_systole_frames (e.g. the table from scripts/compute_lv_volumes.py)")
+    if isinstance(end_systole_frames, (str, os.PathLike)):
+        path = str(end_systole_frames)
+        table = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path, dtype={"subject_id": str})
+        return dict(zip(table.subject_id.astype(str), table.es_frame.astype(int)))
+    return {str(k): int(v) for k, v in end_systole_frames.items()}
+
+
 class CardiacMeshFromBValuesDataset(TensorDataset):
     '''
     Reconstructs meshes from PDM b-values + the per-frame rigid/scale transform
@@ -276,6 +288,7 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
         static_shape: Literal["end_diastole", "temporal_mean", "end_systole"] = "end_diastole",
         center_around_mean: bool = False,
         center_around_own_mean: bool = False,
+        end_systole_frames=None,
         ):
 
         '''
@@ -291,6 +304,10 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             (see cardio_mesh.paths.get_pca_components / get_pca_mean).
           procrustes_transforms: Mapping from IDs to transforms ("rotation" and "traslation"),
             same population-alignment transform used by CardiacMeshPopulationDataset.
+          end_systole_frames: required with static_shape="end_systole": each subject's end-systolic
+            frame (1-based, over all frames, not only phases_filter's), as a {subject_id: frame}
+            mapping or the path to the table written by scripts/compute_lv_volumes.py (es_frame
+            column). That frame is loaded even when phases_filter doesn't include it.
         '''
 
         if center_around_mean and template_mesh is None:
@@ -328,6 +345,13 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
 
         self.template_mesh = template_mesh
         self.static_shape = static_shape
+        self._es_frame_idx = None  # 0-based end-systolic frame per subject (static_shape="end_systole")
+        if static_shape == "end_systole":
+            es_frames = _load_end_systole_frames(end_systole_frames)
+            missing = [id for id in self.ids if id not in es_frames]
+            if missing:
+                raise ValueError(f"No end-systolic frame for {len(missing)} of {len(self.ids)} subjects (e.g. {missing[:5]})")
+            self._es_frame_idx = np.array([es_frames[id] - 1 for id in self.ids])
         self.center_around_mean = center_around_mean
         self.center_around_own_mean = center_around_own_mean
 
@@ -352,6 +376,7 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
                 translation_all = hf["translation"][rows]
                 qrotation_all = hf["qrotation"][rows]
                 scale_all = hf["scale"][rows]
+            self._keep_end_systole(bvals_all, translation_all, qrotation_all, scale_all)
             if frame_idx is not None:
                 bvals_all = bvals_all[:, frame_idx]
                 translation_all = translation_all[:, frame_idx]
@@ -367,10 +392,13 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             self.proc_traslation = Tensor(np.stack(traslation_list))
         else:
             bvals_list, translation_list, qrotation_list, scale_list = [], [], [], []
-            rotation_list, traslation_list = [], []
+            rotation_list, traslation_list, es_list = [], [], []
             for id in self.ids:
                 d = np.load(os.path.join(self._params_dir, f"{id}.npz"))
                 bvals, translation, qrotation, scale = d["bvals"], d["translation"], d["qrotation"], d["scale"]
+                if self._es_frame_idx is not None:
+                    es = self._es_frame_idx[len(bvals_list)]
+                    es_list.append((bvals[es], translation[es], qrotation[es], scale[es]))
                 if frame_idx is not None:
                     bvals, translation, qrotation, scale = (
                         bvals[frame_idx], translation[frame_idx], qrotation[frame_idx], scale[frame_idx]
@@ -389,6 +417,8 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             self.scale = Tensor(np.stack(scale_list))               # (N, T)
             self.proc_rotation = Tensor(np.stack(rotation_list))    # (N, 3, 3)
             self.proc_traslation = Tensor(np.stack(traslation_list))  # (N, 3), from the Procrustes pkl
+            if self._es_frame_idx is not None:
+                self._keep_end_systole(*[np.stack(x)[:, None] for x in zip(*es_list)], frame_idx=np.zeros(len(es_list), int))
 
         logger.info(
             "B-values dataset indexed: subjects=%d, partition=%s, n_components=%d, n_verts=%d, "
@@ -400,6 +430,18 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             time.perf_counter() - load_start,
             time.perf_counter() - start,
         )
+
+
+    def _keep_end_systole(self, bvals, translation, qrotation, scale, frame_idx=None):
+        """Keeps each subject's end-systolic frame parameters (from the unfiltered (N, T_all, ...) arrays)."""
+        if self._es_frame_idx is None:
+            return
+        rows = np.arange(len(bvals))
+        es = self._es_frame_idx if frame_idx is None else frame_idx
+        self.es_bvals = Tensor(np.asarray(bvals)[rows, es])            # (N, n_components)
+        self.es_translation = Tensor(np.asarray(translation)[rows, es])  # (N, 3)
+        self.es_qrotation = Tensor(np.asarray(qrotation)[rows, es])      # (N, 4)
+        self.es_scale = Tensor(np.asarray(scale)[rows, es])              # (N,)
 
 
     def __len__(self):
@@ -417,6 +459,9 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             "scale": self.scale[idx],
             "proc_rotation": self.proc_rotation[idx],
             "proc_traslation": self.proc_traslation[idx],
+            **({"es_bvals": self.es_bvals[idx], "es_translation": self.es_translation[idx],
+                "es_qrotation": self.es_qrotation[idx], "es_scale": self.es_scale[idx]}
+               if self._es_frame_idx is not None else {}),
         }
 
 
@@ -449,8 +494,16 @@ class CardiacMeshFromBValuesDataset(TensorDataset):
             s_t_avg = s_t[:, 0]
         elif self.static_shape == "temporal_mean":
             s_t_avg = s_t.mean(dim=1)
+        elif self.static_shape == "end_systole":
+            # the subject's end-systolic frame, reconstructed like any other frame
+            s_es = reconstruct_shapes_from_bvalues_torch(
+                batch["es_bvals"].unsqueeze(1), batch["es_translation"].unsqueeze(1),
+                batch["es_qrotation"].unsqueeze(1), batch["es_scale"].unsqueeze(1),
+                pca_components, pca_mean,
+            )
+            s_t_avg = transform_mesh_torch(s_es, batch["proc_rotation"], batch["proc_traslation"])[:, 0]
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"static_shape={self.static_shape!r}")
 
         dev_from_tmp_avg = mse(s_t, s_t_avg.unsqueeze(1))
 
