@@ -1,4 +1,5 @@
 import os, sys
+import hashlib
 import logging
 import tempfile
 import time
@@ -220,7 +221,8 @@ def export_test_mesh_samples(lit_module, datamodule, faces, n_samples):
     )
 
 
-def main(model, datamodule, trainer, mlflow_config=None, faces=None, n_mesh_samples=0, additional_mlflow_tags=None):
+def main(model, datamodule, trainer, mlflow_config=None, faces=None, n_mesh_samples=0, additional_mlflow_tags=None,
+         evaluate_only=False):
 
     '''
       config (Namespace):
@@ -234,11 +236,18 @@ def main(model, datamodule, trainer, mlflow_config=None, faces=None, n_mesh_samp
         mlflow_startup(mlflow_config, tags=additional_mlflow_tags)
         mlflow_log_additional_params(config)
 
-    with log_step("Training model"):
-        trainer.fit(model, datamodule=datamodule)
+    if evaluate_only:
+        # the model as initialized (--init_from_checkpoint), without training: e.g. a model trained on
+        # 10 frames evaluated on 50
+        with log_step("Evaluating without training"):
+            trainer.validate(model, datamodule=datamodule)
+            trainer.test(model, datamodule=datamodule)
+    else:
+        with log_step("Training model"):
+            trainer.fit(model, datamodule=datamodule)
 
-    with log_step("Testing best checkpoint"):
-        trainer.test(datamodule=datamodule, ckpt_path='best') # Generates metrics for the full test dataset
+        with log_step("Testing best checkpoint"):
+            trainer.test(datamodule=datamodule, ckpt_path='best') # Generates metrics for the full test dataset
     # trainer.predict(ckpt_path='best', datamodule=datamodule) # Generates figures for a few samples
 
     if mlflow_config and faces is not None and n_mesh_samples > 0:
@@ -340,17 +349,23 @@ if __name__ == "__main__":
                               "1 (default) is the original single-frequency embedding. The decoder input "
                               "grows to latent_dim_c + 2 * K * latent_dim_s, so K > 1 is not "
                               "checkpoint-compatible with runs trained with K = 1.")
+    my_args.add_argument("--evaluate_only", "--evaluate-only", default=False, action="store_true",
+                         help="Don't train: evaluate the model initialized with --init_from_checkpoint on the "
+                              "validation and test sets (e.g. a 10-frame model on 50 frames), logging to MLflow.")
     my_args.add_argument("--init_from_checkpoint", "--init-from-checkpoint", type=str, default=None,
                          help="Initialize the model from a pretrained checkpoint: an MLflow run ID (its best_model.ckpt) "
                               "or a .ckpt path, then train as usual (fresh optimizer). The architecture flags must match "
                               "the pretrained model's. --n_timeframes may differ (transformer aggregator only): the "
                               "encoder's per-frame batch norm is remapped to the closest cardiac phase.")
-    my_args.add_argument("--batch_norm", "--batch-norm", default="shared", choices=["all", "shared", "decoders", "none"],
+    my_args.add_argument("--batch_norm_harmonics", type=int, default=3,
+                         help="Fourier harmonics of the cardiac phase for --batch_norm phase (default 3).")
+    my_args.add_argument("--batch_norm", "--batch-norm", default="shared", choices=["all", "shared", "phase", "decoders", "none"],
                          help="Batch normalization: 'shared' (default: the encoder's is per channel, with statistics "
                               "pooled across frames, so with the transformer aggregator the model works with any number "
                               "of frames), 'all' (the encoder's is per frame and channel, which ties the model to "
-                              "n_timeframes; runs before this option existed used it), 'decoders' (none in the "
-                              "encoder), or 'none'. The decoders' batch norm is per channel except with 'none'.")
+                              "n_timeframes; runs before this option existed used it), 'phase' (the encoder's statistics and "
+                              "parameters are Fourier series in the cardiac phase: centers each phase like 'all', for any "
+                              "number of frames), 'decoders' (none in the encoder), or 'none'. The decoders' batch norm is per channel except with 'none'.")
     my_args.add_argument("--translation_head_hidden", "--translation-head-hidden", type=int, nargs="*", default=[],
                          help="Hidden layer sizes of the translation head (requires --translation_head), e.g. "
                               "'128 128' for an MLP Linear-ReLU-Linear-ReLU-Linear. Empty (default): a single "
@@ -394,6 +409,7 @@ if __name__ == "__main__":
 
     config.batch_size_schedule = args.batch_size_schedule
     config.static_representative = args.static_representative
+    config.evaluate_only = args.evaluate_only
     config.end_systole_file = args.end_systole_file if args.static_representative == "end_systole" else None
     config.center_around_own_mean = args.center_around_own_mean
     config.n_timeframes = args.n_timeframes
@@ -503,6 +519,9 @@ if __name__ == "__main__":
 
     with log_step("Setting up datamodule splits"):
         ( mesh_dm := CardiacMeshPopulationDM(cardiac_dataset, batch_size=config.batch_size, num_workers=args.num_workers, batch_size_scheduler=batch_size_scheduler) ).setup()
+        _test_ids = sorted(cardiac_dataset.ids[k] for k in mesh_dm.test_dataset.indices)
+        logger.info("Split: train=%d val=%d test=%d | test subjects hash=%s", len(mesh_dm.train_dataset), len(mesh_dm.val_dataset),
+                    len(mesh_dm.test_dataset), hashlib.md5(",".join(map(str, _test_ids)).encode()).hexdigest()[:12])
 
     # --------------------------
     # 5. Define Model
@@ -515,7 +534,10 @@ if __name__ == "__main__":
         config.network_architecture.translation_head_hidden = args.translation_head_hidden
         config.network_architecture.n_harmonics = args.n_harmonics
         config.network_architecture.batch_norm = args.batch_norm
+        config.network_architecture.batch_norm_harmonics = args.batch_norm_harmonics
         model      = AutoencoderTemporalSequence.build_from_config(config, mesh_template, args.partition, args.n_timeframes)
+        if args.evaluate_only and not args.init_from_checkpoint:
+            raise ValueError("--evaluate_only requires --init_from_checkpoint")
         if args.init_from_checkpoint:
             # Look run IDs up in this project's MLflow store (not $MLFLOW_TRACKING_URI), even with logging disabled
             tracking_uri = config.mlflow.tracking_uri if config.mlflow else os.path.abspath("mlruns")
@@ -575,4 +597,5 @@ if __name__ == "__main__":
         if args.dry_run:
             exit()
 
-    main(lit_module, mesh_dm, trainer, config.mlflow, faces=faces, n_mesh_samples=args.n_test_mesh_samples, additional_mlflow_tags=additional_mlflow_tags)
+    main(lit_module, mesh_dm, trainer, config.mlflow, faces=faces, n_mesh_samples=args.n_test_mesh_samples, additional_mlflow_tags=additional_mlflow_tags,
+         evaluate_only=args.evaluate_only)

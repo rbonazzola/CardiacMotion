@@ -44,6 +44,7 @@ def get_mlflow_parameters(config):
         "translation_head_hidden": getattr(net, "translation_head_hidden", None) or [],
         "n_harmonics": getattr(net, "n_harmonics", 1),
         "batch_norm": getattr(net, "batch_norm", "all"),
+        "batch_norm_harmonics": getattr(net, "batch_norm_harmonics", None) if getattr(net, "batch_norm", None) == "phase" else None,
         # only meaningful when z_aggr_function=transformer; None/missing for fcn runs
         "transformer_n_layers": transformer_cfg.get("n_layers", None),
         "transformer_d_model": transformer_cfg.get("d_model", None),
@@ -61,6 +62,7 @@ def get_mlflow_parameters(config):
         "center_around_own_mean": getattr(config, "center_around_own_mean", False),
         "init_from_checkpoint": getattr(config, "init_from_checkpoint", None),
         "init_n_timeframes": getattr(config, "init_n_timeframes", None),
+        "evaluate_only": getattr(config, "evaluate_only", False),
         "batch_size": getattr(config, "batch_size", None),
         "batch_size_schedule": getattr(config, "batch_size_schedule", None),
         "n_timeframes": getattr(config, "n_timeframes", None),

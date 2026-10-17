@@ -319,6 +319,7 @@ class Run():
         config.loss.regularization.weight = 0
         # runs from before --batch_norm existed used per-frame batch norm in the encoder ("all")
         config.network_architecture.batch_norm = self.get_param("batch_norm", default="all")
+        config.network_architecture.batch_norm_harmonics = int(self.get_param("batch_norm_harmonics", default=None) or 3)
 
         return config
 

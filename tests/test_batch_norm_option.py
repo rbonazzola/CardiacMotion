@@ -70,3 +70,53 @@ def test_shared_batch_norm_pools_frames_and_works_for_any_number_of_frames():
     for T in (10, 50, 3):
         out = encoder3d.forward_conv_stack(torch.randn(BATCH_SIZE, T, n_nodes[0], N_FEATURES), preserve_graph_structure=False)
         assert out.shape[:2] == (BATCH_SIZE, T)
+
+
+def test_phase_batch_norm_trains_like_per_frame_batch_norm():
+    from models.Model3D import PhaseBatchNorm1d
+    torch.manual_seed(0)
+    bn = PhaseBatchNorm1d(num_channels=4, n_harmonics=3)
+    x = torch.randn(8, 10, 30, 4) * torch.linspace(1, 3, 10)[None, :, None, None] + torch.arange(10.0)[None, :, None, None]
+    y = bn(x)  # training mode, gamma = 1 and beta = 0 at init
+    torch.testing.assert_close(y.mean(dim=(0, 2)), torch.zeros(10, 4), atol=1e-4, rtol=0)
+    torch.testing.assert_close(y.var(dim=(0, 2), unbiased=False), torch.ones(10, 4), atol=1e-3, rtol=0)
+
+
+def test_phase_batch_norm_running_statistics_follow_the_phase_at_any_number_of_frames():
+    from models.Model3D import PhaseBatchNorm1d
+    import math
+    torch.manual_seed(0)
+    bn = PhaseBatchNorm1d(num_channels=2, n_harmonics=2, momentum=0.2)
+
+    def batch(n_frames):
+        theta = 2 * math.pi * torch.arange(n_frames) / n_frames
+        mean = 5 + 3 * torch.cos(theta) - 2 * torch.sin(2 * theta)       # population mean follows the phase
+        sd = torch.sqrt(1 + 0.5 * torch.sin(theta) ** 2)  # variance = 1.25 - 0.25 cos(2 theta): 2 harmonics
+        return torch.randn(256, n_frames, 50, 2) * sd[None, :, None, None] + mean[None, :, None, None]
+
+    for _ in range(50):
+        bn(batch(10))
+    bn.eval()
+    for n_frames in (10, 50, 7):  # evaluated at phases never seen in training
+        y = bn(batch(n_frames))
+        # sampling noise: SE of a frame mean ~ 1.2 / sqrt(256 * 50) ~ 0.01
+        torch.testing.assert_close(y.mean(dim=(0, 2)), torch.zeros(n_frames, 2), atol=0.05, rtol=0)
+        torch.testing.assert_close(y.std(dim=(0, 2)), torch.ones(n_frames, 2), atol=0.05, rtol=0)
+
+
+def test_encoder_with_phase_batch_norm_works_for_any_number_of_frames():
+    A, D, U, n_nodes = load_fixture()
+    encoder3d = Encoder3DMesh(
+        phase_input=False, num_conv_filters_enc=FILTERS, num_features=N_FEATURES,
+        cheb_polynomial_order=[3] * len(FILTERS), n_layers=len(FILTERS), n_nodes=n_nodes,
+        is_variational=False, template=EasyDict({"v": torch.zeros(n_nodes[0], N_FEATURES).numpy()}),
+        adjacency_matrices=A, downsample_matrices=D, latent_dim=None,
+        n_timeframes=10, batch_normalization=True, batch_norm_phase_harmonics=3,
+    )
+    assert all(p.shape[0] == 7 for n, p in encoder3d.named_parameters() if "batch_normalization" in n)  # 2K+1, not T
+    encoder3d.train()
+    encoder3d.forward_conv_stack(torch.randn(BATCH_SIZE, 10, n_nodes[0], N_FEATURES), preserve_graph_structure=False)
+    encoder3d.eval()
+    for T in (10, 50):
+        out = encoder3d.forward_conv_stack(torch.randn(BATCH_SIZE, T, n_nodes[0], N_FEATURES), preserve_graph_structure=False)
+        assert out.shape[:2] == (BATCH_SIZE, T)

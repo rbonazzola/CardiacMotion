@@ -75,7 +75,7 @@ COMMON_ARGS = [
 ENCODER_ARGS   = COMMON_ARGS + ["phase_input", "downsample_matrices", "num_conv_filters_enc", "latent_dim_c", "latent_dim_s"]
 DECODER_C_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_c", "latent_dim_content", "batch_normalization"]
 DECODER_S_ARGS = COMMON_ARGS + ["upsample_matrices", "num_conv_filters_dec_s", "latent_dim_content", "latent_dim_style", "batch_normalization"]
-BATCH_NORM_OPTIONS = ("all", "shared", "decoders", "none")
+BATCH_NORM_OPTIONS = ("all", "shared", "phase", "decoders", "none")
 
 
 class AutoencoderTemporalSequence(nn.Module):
@@ -134,15 +134,17 @@ class AutoencoderTemporalSequence(nn.Module):
         # batch_norm: "all" (default: the encoder's batch norm is per frame and channel, the only part
         # of a transformer-aggregator model tied to n_timeframes), "shared" (encoder batch norm per
         # channel, pooled across frames: works for any number of frames), "decoders" (none in the
-        # encoder), "none".
+        # encoder), "none", "phase" (encoder batch norm whose statistics and parameters are Fourier
+        # series in the cardiac phase: centers each phase like "all", for any number of frames).
         batch_norm = config.network_architecture.get("batch_norm", "all")
         if batch_norm not in BATCH_NORM_OPTIONS:
             raise ValueError(f"batch_norm={batch_norm!r}, expected one of {BATCH_NORM_OPTIONS}")
         coma_args["batch_normalization"] = batch_norm != "none"  # decoders
 
         enc_config = EasyDict({k: v for k, v in coma_args.items() if k in ENCODER_ARGS})
-        encoder = Encoder3DMesh(**enc_config, n_timeframes=n_timeframes, batch_normalization=batch_norm in ("all", "shared"),
-                                batch_norm_across_time=batch_norm == "shared")
+        encoder = Encoder3DMesh(**enc_config, n_timeframes=n_timeframes, batch_normalization=batch_norm in ("all", "shared", "phase"),
+                                batch_norm_across_time=batch_norm == "shared",
+                                batch_norm_phase_harmonics=int(config.network_architecture.get("batch_norm_harmonics", 3)) if batch_norm == "phase" else 0)
 
         assert "latent_dim" not in enc_config or enc_config.latent_dim == config.network_architecture.latent_dim_c + config.network_architecture.latent_dim_s, f"{latent_dim=} but it should equal the sum of {config.network_architecture.latent_dim_c=} and {config.network_architecture.latent_dim_s=}"
 
@@ -267,7 +269,7 @@ class EncoderTemporalSequence(nn.Module):
 
         # mu = torch.cat(mu).reshape(-1, self.n_timeframes, self.latent_dim)
 
-        h = self.encoder_3d_mesh.forward_conv_stack(x, preserve_graph_structure=False)
+        h = self.encoder_3d_mesh.forward_conv_stack(x, preserve_graph_structure=False, phase=frame_phases)
         # frame_phases: optional [T] radians, forwarded to z_aggr_function so a
         # phase-aware aggregator (e.g. TransformerAggregator) knows the true
         # cardiac phase of each frame in x, rather than assuming x's T frames

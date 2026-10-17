@@ -474,6 +474,16 @@ class CoMA_Lightning(pl.LightningModule):
     
     
     def on_fit_start(self):
+        self._move_matrices_to_device()
+
+    # validate()/test() without fit() (e.g. --evaluate_only) never call on_fit_start
+    def on_validation_start(self):
+        self._move_matrices_to_device()
+
+    def on_test_start(self):
+        self._move_matrices_to_device()
+
+    def _move_matrices_to_device(self):
 
         #TODO: check of alternatives since .to(device) is not recommended
         #This is the most elegant way I found so far to transfer the tensors to the right device 

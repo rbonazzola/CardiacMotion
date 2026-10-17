@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import torch
 from torch import nn
@@ -8,6 +9,66 @@ from copy import copy
 from typing import Sequence, Union, List
 
 #TODO: Implement common parent class for encoder and decoder (GraphConvStack?), to capture common behaviour.
+
+class PhaseBatchNorm1d(nn.Module):
+    '''
+    Batch norm for (batch, time, vertices, channels) inputs whose statistics and affine parameters
+    are smooth functions of the cardiac phase theta (a Fourier series with n_harmonics harmonics):
+    like the per-frame batch norm it centers and scales each phase separately (removing the
+    population-average motion), but its (2 * n_harmonics + 1) * n_channels parameters don't depend
+    on the number of frames, so the model works with any number of frames.
+
+    Training: normalizes with each frame's batch statistics (over batch and vertices), as the
+    per-frame batch norm does, and updates running Fourier fits of the mean and variance.
+    Evaluation: uses the running fits evaluated at each frame's phase.
+    '''
+
+    def __init__(self, num_channels, n_harmonics=3, momentum=0.1, eps=1e-5):
+        super(PhaseBatchNorm1d, self).__init__()
+        self.n_harmonics, self.momentum, self.eps = n_harmonics, momentum, eps
+        n_basis = 2 * n_harmonics + 1
+        self.weight = nn.Parameter(torch.zeros(n_basis, num_channels))
+        self.bias = nn.Parameter(torch.zeros(n_basis, num_channels))
+        with torch.no_grad():
+            self.weight[0] = 1.0  # constant gamma = 1 at init
+        self.register_buffer("running_mean_coef", torch.zeros(n_basis, num_channels))
+        self.register_buffer("running_var_coef", torch.zeros(n_basis, num_channels))
+        self.running_var_coef[0] = 1.0
+        self.register_buffer("num_batches_tracked", torch.tensor(0, dtype=torch.long))
+
+    def basis(self, phase):
+        """(T,) phases in radians -> (T, 2K+1): [1, cos(theta), sin(theta), ..., cos(K theta), sin(K theta)]."""
+        columns = [torch.ones_like(phase)]
+        for k in range(1, self.n_harmonics + 1):
+            columns += [torch.cos(k * phase), torch.sin(k * phase)]
+        return torch.stack(columns, dim=1)
+
+    def forward(self, x, phase=None):
+        if x.dim() == 3:  # (batch, vertices, channels): a single frame at phase 0
+            return self.forward(x.unsqueeze(1), phase=torch.zeros(1, device=x.device)).squeeze(1)
+        n_timepoints = x.shape[1]
+        if phase is None:  # equispaced frames over one cycle
+            phase = 2 * math.pi * torch.arange(n_timepoints, device=x.device, dtype=x.dtype) / n_timepoints
+        basis = self.basis(phase.to(device=x.device, dtype=x.dtype))  # (T, 2K+1)
+
+        if self.training:
+            mean = x.mean(dim=(0, 2))                  # (T, C)
+            var = x.var(dim=(0, 2), unbiased=False)    # (T, C)
+            with torch.no_grad():
+                fit = torch.linalg.pinv(basis)         # least-squares Fourier fit over the frames
+                n = x.shape[0] * x.shape[2]
+                unbiased_var = var * n / max(n - 1, 1)
+                self.running_mean_coef.lerp_(fit @ mean.detach(), self.momentum)
+                self.running_var_coef.lerp_(fit @ unbiased_var.detach(), self.momentum)
+                self.num_batches_tracked += 1
+        else:
+            mean = basis @ self.running_mean_coef
+            var = (basis @ self.running_var_coef).clamp_min(self.eps)
+
+        x_hat = (x - mean[None, :, None, :]) / torch.sqrt(var[None, :, None, :] + self.eps)
+        gamma, beta = basis @ self.weight, basis @ self.bias  # (T, C)
+        return x_hat * gamma[None, :, None, :] + beta[None, :, None, :]
+
 
 class ParallelBatchNorm1d(nn.Module):
     '''
@@ -119,7 +180,8 @@ class Encoder3DMesh(nn.Module):
         batch_normalization = True,
         n_timeframes = 1, 
         activation_layers="ReLU",
-        batch_norm_across_time = False):
+        batch_norm_across_time = False,
+        batch_norm_phase_harmonics = 0):
 
         super(Encoder3DMesh, self).__init__()
 
@@ -130,6 +192,7 @@ class Encoder3DMesh(nn.Module):
         self.K = cheb_polynomial_order
         self.batch_normalization = batch_normalization
         self.batch_norm_across_time = batch_norm_across_time
+        self.batch_norm_phase_harmonics = batch_norm_phase_harmonics  # > 0: PhaseBatchNorm1d
 
         self.n_timeframes = n_timeframes
         self.matrices = {}
@@ -170,7 +233,9 @@ class Encoder3DMesh(nn.Module):
             encoder[layer]["graph_conv"] = cheb_conv_layers[i]
             encoder[layer]["pool"] = pool_layers[i]
             if self.batch_normalization:
-                if self.batch_norm_across_time:
+                if self.batch_norm_phase_harmonics > 0:
+                    encoder[layer]["batch_normalization"] = PhaseBatchNorm1d(self.filters_enc[i+1], self.batch_norm_phase_harmonics)
+                elif self.batch_norm_across_time:
                     encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.filters_enc[i+1], across_time=True)
                 else:
                     encoder[layer]["batch_normalization"] = ParallelBatchNorm1d(self.n_timeframes*self.filters_enc[i+1])
@@ -245,7 +310,8 @@ class Encoder3DMesh(nn.Module):
 
 
     # perform a forward pass only through the convolutional stack (not the FCN layer)
-    def forward_conv_stack(self, x, preserve_graph_structure=True):
+    def forward_conv_stack(self, x, preserve_graph_structure=True, phase=None):
+        # phase: optional (T,) radians of x's frames, for PhaseBatchNorm1d (default: equispaced)
         
         # a "layer" here is: a graph convolution + pooling operation + activation function
         for i, layer in enumerate(self.layers): 
@@ -261,7 +327,8 @@ class Encoder3DMesh(nn.Module):
             x = self.layers[layer]["pool"](x, self.matrices["downsample"][i])
             
             if 'batch_normalization' in self.layers[layer]:
-                x = self.layers[layer]["batch_normalization"](x)
+                batch_norm = self.layers[layer]["batch_normalization"]
+                x = batch_norm(x, phase=phase) if isinstance(batch_norm, PhaseBatchNorm1d) else batch_norm(x)
             
             x = self.layers[layer]["activation_function"](x)
         

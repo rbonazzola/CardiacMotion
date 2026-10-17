@@ -167,3 +167,25 @@ def test_thickness_metrics_not_logged_without_pairs():
     metrics = trainer.validate(lit, loader, verbose=False)[0]
     assert not any(k in metrics for k in ("val_thickness_mae", "val_thickness_rel_err", "val_thickness_nrmse"))
     assert metrics["val_thickness_loss"] == 0.0
+
+
+def test_validation_without_fit_moves_the_laplacian_to_the_model_device():
+    # validate()/test() alone (e.g. --evaluate_only) must not rely on on_fit_start
+    from test_training import build_model, load_fixture, make_lit
+    A, D, U, n_nodes = load_fixture()
+    lit = make_lit(build_model(A, D, U, n_nodes))
+    lit.laplacian = torch.eye(n_nodes[0]).to_sparse()
+    moved = []
+    original = lit._move_matrices_to_device
+    lit._move_matrices_to_device = lambda: (moved.append(True), original())
+    loader = DataLoader([make_batch_for_fixture(n_nodes)], batch_size=None)
+    trainer = pl.Trainer(logger=False, accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    trainer.validate(lit, loader, verbose=False)
+    trainer.test(lit, loader, verbose=False)
+    assert len(moved) == 2  # once for validation, once for test
+
+
+def make_batch_for_fixture(n_nodes):
+    from test_training import make_batch
+    torch.manual_seed(0)
+    return make_batch(n_nodes[0])
